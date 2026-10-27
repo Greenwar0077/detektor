@@ -85,6 +85,23 @@ function loadImage(url) {
   });
 }
 
+// Adres obrazu tła (ortofoto WMS albo kafelki XYZ) dla kafelka mapy.
+function underUrl(under, z, tx, ty, px) {
+  if (under.type === 'xyz') {
+    return under.url.replace('{z}', z).replace('{x}', tx).replace('{y}', ty);
+  }
+  const res = 156543.03392804097 / Math.pow(2, z);
+  const W = 20037508.342789244;
+  const minx = -W + tx * 256 * res;
+  const maxy = W - ty * 256 * res;
+  const bbox = [minx, maxy - 256 * res, minx + 256 * res, maxy].join(',');
+  return (
+    `${under.url}?service=WMS&request=GetMap&version=1.1.1&layers=${encodeURIComponent(under.layers)}` +
+    `&styles=&format=${encodeURIComponent(under.format || 'image/jpeg')}&transparent=false` +
+    `&srs=EPSG:3857&bbox=${bbox}&width=${px}&height=${px}`
+  );
+}
+
 export function createWmts2180Layer(def, options) {
   const Layer = L.GridLayer.extend({
     createTile(coords, done) {
@@ -153,7 +170,17 @@ export function createWmts2180Layer(def, options) {
       const got = loaded.filter((t) => t.img);
       if (!got.length) return false;
 
-      const ctx = tile.getContext('2d');
+      // Z tłem: cieniowanie rysujemy na osobnym płótnie i mnożymy z tłem raz, na końcu
+      // (to działa w każdej przeglądarce, nie wymaga mix-blend-mode).
+      const mix = !!def.under;
+      let underImg = null;
+      const shade = mix ? document.createElement('canvas') : tile;
+      if (mix) {
+        shade.width = tile.width;
+        shade.height = tile.height;
+        underImg = await loadImage(underUrl(def.under, z, tx, ty, tile.width));
+      }
+      const ctx = shade.getContext('2d');
       for (let j = 0; j < n; j++) {
         for (let i = 0; i < n; i++) {
           const tris = [
@@ -191,6 +218,15 @@ export function createWmts2180Layer(def, options) {
             }
           }
         }
+      }
+      if (mix) {
+        const out = tile.getContext('2d');
+        if (underImg) out.drawImage(underImg, 0, 0, tile.width, tile.height);
+        out.save();
+        out.globalCompositeOperation = underImg ? 'multiply' : 'source-over';
+        out.globalAlpha = def.shadeAlpha ?? 0.8;
+        out.drawImage(shade, 0, 0);
+        out.restore();
       }
       return true;
     }

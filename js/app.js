@@ -3,10 +3,10 @@ import { CONFIG } from '../config.js';
 import * as store from './store.js';
 import { createWmts2180Layer } from './wmts2180.js';
 import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
-import { CATEGORIES, SOILS, catLabel } from './data.js';
+import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -539,7 +539,7 @@ function openSheet(title, nodes, keepScroll = false) {
 
 function hideSheet() {
   const d = S.draft;
-  if (d && d.isNew && (d.add.length || d.notes.trim())) toast('Niezapisane znalezisko odrzucono.', 3500);
+  if (d && d.isNew && !d.saved && (d.add.length || d.notes.trim())) toast('Niezapisane znalezisko odrzucono.', 3500);
   sheetEl.hidden = true;
   backdrop.hidden = true;
   document.body.classList.remove('sheet-open');
@@ -555,6 +555,11 @@ function closeSheet() {
 }
 
 $('#sheet-close').addEventListener('click', closeSheet);
+for (const ev of ['input', 'change', 'click']) sheetBody.addEventListener(ev, () => saveDraftSoon());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') saveDraftNow();
+});
+window.addEventListener('pagehide', saveDraftNow);
 backdrop.addEventListener('click', closeSheet);
 
 function openViewer(url) {
@@ -572,6 +577,10 @@ $('#viewer').addEventListener('click', (e) => {
 });
 
 window.addEventListener('popstate', () => {
+  if (cam) {
+    closeCamera();
+    return;
+  }
   if (S.picking) {
     endPick(S.picking.result);
     return;
@@ -646,9 +655,38 @@ async function resizeImage(file, max = 1600, quality = 0.82) {
 
 /* ------------------------------------------------------------------ formularz znaleziska */
 
+// Autozapis niedokończonego znaleziska: Android potrafi odświeżyć stronę, gdy w tle działa aparat.
+let draftTimer = 0;
+function saveDraftNow() {
+  const d = S.draft;
+  if (!d || !d.isNew || d.saved) return;
+  LS.set('draft', {
+    id: d.id,
+    loc: d.loc,
+    ts: d.ts,
+    cat: d.cat,
+    hazard: d.hazard,
+    depth: d.depth,
+    soil: d.soil,
+    signal: d.signal,
+    notes: d.notes,
+    photos: d.add.map((a) => a.id)
+  });
+}
+function saveDraftSoon() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(saveDraftNow, 350);
+}
+
 function cleanupDraft() {
   const d = S.draft;
   if (!d) return;
+  clearTimeout(draftTimer);
+  if (!d.saved) {
+    // porzucony szkic: usuwamy jego zdjęcia z pamięci i zapis szkicu
+    for (const a of d.add) store.del('photos', a.id).catch(() => {});
+    if (d.isNew) LS.set('draft', null);
+  }
   for (const u of d.urls.values()) URL.revokeObjectURL(u);
   for (const a of d.add) URL.revokeObjectURL(a.url);
   S.draft = null;
@@ -695,6 +733,36 @@ async function openForm(pin, preset) {
   }
 }
 
+async function restoreDraft(sv) {
+  const d = {
+    isNew: true,
+    id: typeof sv.id === 'string' ? sv.id : store.uid(),
+    loc: sv.loc && Number.isFinite(sv.loc.lat) && Number.isFinite(sv.loc.lng) ? sv.loc : null,
+    ts: Number.isFinite(sv.ts) ? sv.ts : Date.now(),
+    cat: isCat(sv.cat) ? sv.cat : 'other',
+    hazard: !!sv.hazard,
+    depth: String(sv.depth ?? ''),
+    soil: String(sv.soil ?? ''),
+    signal: String(sv.signal ?? ''),
+    notes: String(sv.notes ?? ''),
+    keep: [],
+    removed: new Set(),
+    urls: new Map(),
+    add: [],
+    busy: 0,
+    ui: {}
+  };
+  if (!d.loc) return false;
+  for (const id of Array.isArray(sv.photos) ? sv.photos : []) {
+    const ph = await store.get('photos', id);
+    if (ph) d.add.push({ id, blob: ph.blob, url: URL.createObjectURL(ph.blob) });
+  }
+  cleanupDraft();
+  S.draft = d;
+  renderForm();
+  return true;
+}
+
 function srcLabel(l) {
   if (l.src === 'gps') return `GPS${l.acc != null ? ` ±${Math.round(l.acc)} m` : ''}`;
   if (l.src === 'pick') return 'Wskazane na mapie';
@@ -704,6 +772,7 @@ function srcLabel(l) {
 function renderLoc() {
   const d = S.draft;
   if (!d) return;
+  saveDraftSoon();
   const l = d.loc;
   const pg = toPuwg1992(l.lat, l.lng);
   d.ui.loc.replaceChildren(
@@ -759,6 +828,8 @@ function renderThumbs() {
             onClick: () => {
               d.add = d.add.filter((x) => x !== a);
               URL.revokeObjectURL(a.url);
+              store.del('photos', a.id).catch(() => {});
+              saveDraftSoon();
               renderThumbs();
             }
           },
@@ -778,21 +849,36 @@ function refreshSave() {
   d.ui.save.textContent = d.busy > 0 ? 'Przetwarzam zdjęcie…' : d.isNew ? 'Zapisz znalezisko' : 'Zapisz zmiany';
 }
 
+async function addPhotoBlob(blob) {
+  const d = S.draft;
+  if (!d) return false;
+  if (d.keep.length + d.add.length >= 12) {
+    toast('Maksymalnie 12 zdjęć przy jednym znalezisku.');
+    return false;
+  }
+  const a = { id: store.uid(), blob, url: URL.createObjectURL(blob) };
+  d.add.push(a);
+  // zdjęcie od razu do pamięci telefonu: przeżyje odświeżenie strony
+  try {
+    await store.put('photos', { id: a.id, blob, ts: Date.now() });
+  } catch (e) {
+    /* zapis nastąpi przy zapisie znaleziska */
+  }
+  renderThumbs();
+  saveDraftSoon();
+  return true;
+}
+
 async function addPhotos(files) {
   const d = S.draft;
   if (!d) return;
   for (const f of files) {
-    if (d.keep.length + d.add.length >= 12) {
-      toast('Maksymalnie 12 zdjęć przy jednym znalezisku.');
-      break;
-    }
     d.busy++;
     refreshSave();
     try {
       const blob = await resizeImage(f);
       if (S.draft !== d) return;
-      d.add.push({ id: store.uid(), blob, url: URL.createObjectURL(blob) });
-      renderThumbs();
+      if (!(await addPhotoBlob(blob))) break;
     } catch (e) {
       toast('Nie udało się przetworzyć zdjęcia.');
     } finally {
@@ -800,6 +886,71 @@ async function addPhotos(files) {
       refreshSave();
     }
   }
+}
+
+/* ------------------------------------------------------------------ aparat w aplikacji */
+
+let cam = null;
+
+async function openCamera(fallbackInput) {
+  if (cam || !S.draft) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    fallbackInput.click();
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 2560 }, height: { ideal: 1920 } },
+      audio: false
+    });
+  } catch (e) {
+    toast('Brak dostępu do aparatu. Użyj „Z galerii” albo zezwól na aparat w ustawieniach witryny.', 5000);
+    return;
+  }
+  const video = h('video', { autoplay: true, playsinline: true, muted: true });
+  video.muted = true;
+  video.srcObject = stream;
+  const count = h('span', { class: 'cam-count' }, '');
+  const shutter = h(
+    'button',
+    {
+      type: 'button',
+      class: 'shutter',
+      'aria-label': 'Zrób zdjęcie',
+      onClick: async () => {
+        if (!video.videoWidth) return;
+        const k = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.round(video.videoWidth * k);
+        c.height = Math.round(video.videoHeight * k);
+        c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+        const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
+        if (!blob) return;
+        flash.classList.remove('go');
+        void flash.offsetWidth;
+        flash.classList.add('go');
+        const ok = await addPhotoBlob(blob);
+        const n = S.draft ? S.draft.add.length : 0;
+        count.textContent = n ? `Zdjęć: ${n}` : '';
+        if (!ok) history.back();
+      }
+    },
+    h('i')
+  );
+  const flash = h('div', { class: 'cam-flash' });
+  const done = h('button', { type: 'button', class: 'btn primary', onClick: () => history.back() }, 'Gotowe');
+  const el = h('div', { id: 'camera', class: 'camera' }, video, flash, h('div', { class: 'cam-bar' }, count, shutter, done));
+  document.body.append(el);
+  cam = { el, stream };
+  history.pushState({ cam: 1 }, '');
+}
+
+function closeCamera() {
+  if (!cam) return;
+  for (const t of cam.stream.getTracks()) t.stop();
+  cam.el.remove();
+  cam = null;
 }
 
 function renderForm() {
@@ -1015,7 +1166,7 @@ function renderForm() {
       h(
         'div',
         { class: 'row-actions' },
-        h('button', { type: 'button', class: 'btn', onClick: () => camInput.click() }, icon('camera', 18), 'Zrób zdjęcie'),
+        h('button', { type: 'button', class: 'btn', onClick: () => openCamera(camInput) }, icon('camera', 18), 'Zrób zdjęcie'),
         h('button', { type: 'button', class: 'btn', onClick: () => galInput.click() }, icon('image', 18), 'Z galerii'),
         camInput,
         galInput
@@ -1057,6 +1208,8 @@ async function savePin() {
     return;
   }
   const wasNew = d.isNew;
+  d.saved = true;
+  if (wasNew) LS.set('draft', null);
   S.pins.set(p.id, p);
   renderPin(p);
   LS.set('lastCat', p.cat);
@@ -1282,9 +1435,36 @@ function openLayers(keepScroll = false) {
     )
   );
   const hist = (CONFIG.historical || []).map((d) => overlayRow({ ...d, kind: 'hist' }));
+  const presets = [
+    ['Hybryda: ortofoto + nazwy i adresy', 'orto', ['nazwy-emuia', 'adresy-kina']],
+    ['Ortofoto + LiDAR + nazwy', 'orto-nmt', ['nazwy-emuia']],
+    ['Sam LiDAR (cieniowanie)', 'nmt-base', []],
+    ['Mapa OSM', 'osm', []]
+  ];
+  const presetRow = h(
+    'div',
+    { class: 'opts' },
+    presets.map(([label, base, ons]) =>
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'opt',
+          onClick: () => {
+            layerState.base = base;
+            layerState.on = Object.fromEntries(ons.map((id) => [id, true]));
+            applyLayers();
+            openLayers(true);
+          }
+        },
+        label
+      )
+    )
+  );
   openSheet(
     'Warstwy mapy',
     [
+      h('div', { class: 'section' }, h('h3', null, 'Szybkie ustawienia'), presetRow),
       h('div', { class: 'section' }, h('h3', null, 'Podkład'), h('div', { role: 'radiogroup', class: 'section' }, base)),
       h('div', { class: 'section' }, h('h3', null, 'Nakładki'), CONFIG.overlays.map((d) => overlayRow({ ...d, kind: 'overlay' }))),
       h(
@@ -1317,7 +1497,8 @@ function exportGPX(onlyTrack) {
 }
 async function exportBackup() {
   try {
-    const photos = await store.getAll('photos');
+    const used = new Set([...S.pins.values()].flatMap((p) => p.photos || []));
+    const photos = (await store.getAll('photos')).filter((ph) => used.has(ph.id));
     const text = await makeBackup([...S.pins.values()], [...S.tracks.values()], photos);
     download(`detektor-kopia-${stamp()}.json`, text, 'application/json');
     LS.set('lastBackup', Date.now());
@@ -1592,6 +1773,14 @@ async function boot() {
         S.tracks.set(t.id, t);
         renderTrack(t);
       }
+    }
+    // porządki: zdjęcia nieprzypisane do znaleziska ani do szkicu
+    const sv = LS.get('draft', null);
+    const keep = new Set([...S.pins.values()].flatMap((p) => p.photos || []));
+    if (sv && Array.isArray(sv.photos)) sv.photos.forEach((id) => keep.add(id));
+    for (const ph of await store.getAll('photos')) if (!keep.has(ph.id)) store.del('photos', ph.id).catch(() => {});
+    if (sv && sv.loc) {
+      if (await restoreDraft(sv)) toast('Przywrócono niezapisane znalezisko.', 4000);
     }
   } catch (e) {
     toast('Pamięć lokalna niedostępna. Dane nie zostaną zachowane.', 7000);

@@ -53,12 +53,43 @@ export const CONFIG = {
       maxNativeZoom: 19,
       attribution: '© GUGiK (geoportal.gov.pl)'
     }
+    ,{
+      id: 'orto-nmt',
+      name: 'Ortofotomapa + NMT (LiDAR)',
+      type: 'wmts2180',
+      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMTS/ShadedRelief',
+      layer: 'ISOK_Cien',
+      format: 'image/jpeg',
+      under: {
+        type: 'wms',
+        url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution',
+        layers: 'Raster',
+        format: 'image/jpeg'
+      },
+      shadeAlpha: 0.8,
+      minZoom: 9,
+      maxNativeZoom: 19,
+      attribution: '© GUGiK (geoportal.gov.pl)'
+    }
+    ,{
+      id: 'osm-nmt',
+      name: 'Mapa OSM + NMT (LiDAR)',
+      type: 'wmts2180',
+      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMTS/ShadedRelief',
+      layer: 'ISOK_Cien',
+      format: 'image/jpeg',
+      under: { type: 'xyz', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png' },
+      shadeAlpha: 0.7,
+      minZoom: 9,
+      maxNativeZoom: 19,
+      attribution: '© GUGiK (geoportal.gov.pl), © OpenStreetMap'
+    }
   ],
 
   overlays: [
     {
       id: 'nmt',
-      name: 'NMT: cieniowanie terenu (LiDAR)',
+      name: 'NMT: cieniowanie jako nakładka (używa mix-blend, może nie działać wszędzie)',
       type: 'wmts2180',
       url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMTS/ShadedRelief',
       layer: 'ISOK_Cien',
@@ -68,6 +99,36 @@ export const CONFIG = {
       maxNativeZoom: 19,
       opacity: 0.85,
       attribution: '© GUGiK (geoportal.gov.pl)'
+    }
+    ,{
+      id: 'nazwy-emuia',
+      name: 'Nazwy: miejscowości, ulice, place (EMUiA GUGiK)',
+      type: 'wms',
+      url: 'https://emuia.gugik.gov.pl/wmsproxy/emuia/wms',
+      layers: 'emuia:layer_miejscowosci_labels,emuia:layer_ulice_labels,emuia:layer_place_labels',
+      format: 'image/png',
+      transparent: true,
+      version: '1.1.1',
+      attribution: '© GUGiK (EMUiA)'
+    }
+    ,{
+      id: 'adresy-kina',
+      name: 'Adresy: numery domów i ulice (Geoportal)',
+      type: 'wms',
+      url: 'https://mapy.geoportal.gov.pl/wss/ext/KrajowaIntegracjaNumeracjiAdresowej',
+      layers: 'prg-ulice,prg-adresy',
+      format: 'image/png',
+      transparent: true,
+      version: '1.3.0',
+      attribution: '© GUGiK (PRG)'
+    }
+    ,{
+      id: 'nazwy-carto',
+      name: 'Nazwy (OpenStreetMap/CARTO), zapasowe',
+      type: 'xyz',
+      url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}.png',
+      maxNativeZoom: 19,
+      attribution: '© OpenStreetMap, © CARTO'
     }
   ],
 

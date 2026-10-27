@@ -1,6 +1,6 @@
 // Service worker: przechowuje pliki aplikacji, żeby uruchamiała się bez internetu.
 // Kafelki zewnętrznych map (OSM, Geoportal) nie są tu zapisywane: to etap 2 (tryb offline).
-const CACHE = 'detektor-v3';
+const CACHE = 'detektor-v4';
 const ASSETS = [
   './',
   'index.html',

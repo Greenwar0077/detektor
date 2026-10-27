@@ -6,7 +6,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -153,6 +153,14 @@ const S = {
 
 $('#btn-locate').append(icon('locate'));
 $('#btn-layers').append(icon('layers'));
+// Szybkie przełączniki na mapie: cieniowanie LiDAR i nazwy ulic
+for (const [id, label, text] of [
+  ['btn-names', 'Nazwy ulic i miejscowości: włącz lub wyłącz', 'Aa'],
+  ['btn-nmt', 'Cieniowanie LiDAR: włącz lub wyłącz', 'LiDAR']
+]) {
+  const b = h('button', { id, class: 'round quick', type: 'button', 'aria-label': label }, h('span', null, text));
+  $('#btn-layers').after(b);
+}
 $('#btn-menu').append(icon('menu'));
 $('#sheet-close').append(icon('close'));
 $('#viewer-close').append(icon('close'));
@@ -189,14 +197,50 @@ map.on('contextmenu', (e) => {
   openForm(null, { lat: e.latlng.lat, lng: e.latlng.lng, acc: null, src: 'pick' });
 });
 
+// Cieniowanie LiDAR na dowolnym podkładzie: osobny wariant podkładu, który sam miksuje
+// kafelki (nie wymaga mix-blend-mode, działa w każdej przeglądarce).
+const NMT_DEF = CONFIG.base.find((d) => d.id === 'nmt-base');
+const compositeDefs = NMT_DEF
+  ? CONFIG.base
+      .filter((b) => b.id !== 'nmt-base' && (b.type === 'xyz' || b.type === 'wms'))
+      .map((b) => ({
+        ...NMT_DEF,
+        id: b.id + '-nmt',
+        kind: 'base',
+        name: b.name + ' + LiDAR',
+        under:
+          b.type === 'xyz'
+            ? { type: 'xyz', url: b.url }
+            : { type: 'wms', url: b.url, layers: b.layers, format: b.format },
+        shadeAlpha: b.type === 'xyz' ? 0.7 : 0.8,
+        attribution: [b.attribution, NMT_DEF.attribution].filter(Boolean).join(', ')
+      }))
+  : [];
 const ALL_DEFS = [
   ...CONFIG.base.map((d) => ({ ...d, kind: 'base' })),
+  ...compositeDefs,
   ...CONFIG.overlays.map((d) => ({ ...d, kind: 'overlay' })),
   ...(CONFIG.historical || []).map((d) => ({ ...d, kind: 'hist' }))
 ];
 const layerObjs = new Map();
-const layerState = Object.assign({ base: CONFIG.base[0].id, on: {}, opacity: {} }, LS.get('layers', {}));
-if (!CONFIG.base.some((b) => b.id === layerState.base)) layerState.base = CONFIG.base[0].id;
+const layerState = (() => {
+  const s = LS.get('layers', {}) || {};
+  const st = {
+    base: CONFIG.base.some((b) => b.id === s.base) ? s.base : CONFIG.base[0].id,
+    last: CONFIG.base.some((b) => b.id === s.last && b.id !== 'nmt-base') ? s.last : 'orto',
+    nmt: !!s.nmt,
+    names: !!s.names,
+    hist: s.hist && typeof s.hist === 'object' ? s.hist : {},
+    opacity: s.opacity && typeof s.opacity === 'object' ? s.opacity : {}
+  };
+  if (st.base !== 'nmt-base') st.last = st.base;
+  return st;
+})();
+
+function effectiveBase() {
+  if (layerState.base === 'nmt-base' || !layerState.nmt) return layerState.base;
+  return layerState.base + '-nmt';
+}
 
 function makeLayer(def) {
   const o = {
@@ -251,7 +295,12 @@ function getLayer(def) {
 
 function applyLayers() {
   for (const def of ALL_DEFS) {
-    const want = def.kind === 'base' ? layerState.base === def.id : !!layerState.on[def.id];
+    const want =
+      def.kind === 'base'
+        ? effectiveBase() === def.id
+        : def.kind === 'overlay'
+          ? layerState.names
+          : !!layerState.hist[def.id];
     const existing = layerObjs.get(def.id);
     if (want) {
       const l = getLayer(def);
@@ -261,6 +310,7 @@ function applyLayers() {
     }
   }
   LS.set('layers', layerState);
+  updateQuick();
 }
 
 /* ------------------------------------------------------------------ znaczniki i ślady na mapie */
@@ -1375,8 +1425,8 @@ function openList() {
 
 /* ------------------------------------------------------------------ warstwy */
 
-function overlayRow(def) {
-  const on = !!layerState.on[def.id];
+function histRow(def) {
+  const on = !!layerState.hist[def.id];
   const op = layerState.opacity[def.id] ?? def.opacity ?? 1;
   const toggle = h(
     'button',
@@ -1385,7 +1435,7 @@ function overlayRow(def) {
       class: 'opt',
       'aria-pressed': String(on),
       onClick: () => {
-        layerState.on[def.id] = !on;
+        layerState.hist[def.id] = !on;
         applyLayers();
         openLayers(true);
       }
@@ -1415,6 +1465,52 @@ function overlayRow(def) {
   );
 }
 
+function setBase(id) {
+  if (id === 'nmt-base' && layerState.base !== 'nmt-base') layerState.last = layerState.base;
+  layerState.base = id;
+  if (id !== 'nmt-base') layerState.last = id;
+  applyLayers();
+}
+
+function toggleNmt() {
+  if (layerState.base === 'nmt-base') {
+    // z „samego LiDAR-u” wracamy do poprzedniego podkładu, bez cieniowania
+    layerState.base = layerState.last;
+    layerState.nmt = false;
+  } else {
+    layerState.nmt = !layerState.nmt;
+  }
+  applyLayers();
+}
+
+function toggleNames() {
+  layerState.names = !layerState.names;
+  applyLayers();
+}
+
+function updateQuick() {
+  const n = $('#btn-nmt');
+  const t = $('#btn-names');
+  if (n) {
+    const on = layerState.base === 'nmt-base' || layerState.nmt;
+    n.classList.toggle('active', on);
+    n.setAttribute('aria-pressed', String(on));
+  }
+  if (t) {
+    t.classList.toggle('active', layerState.names);
+    t.setAttribute('aria-pressed', String(layerState.names));
+  }
+}
+
+function switchLine(label, hint, on, disabled, onClick) {
+  const btn = h(
+    'button',
+    { type: 'button', class: 'opt', 'aria-pressed': String(on), disabled: disabled || null, onClick },
+    on ? 'Tak' : 'Nie'
+  );
+  return h('div', { class: 'switch' }, h('span', null, label, hint && h('small', { class: 'hint' }, hint)), btn);
+}
+
 function openLayers(keepScroll = false) {
   const base = CONFIG.base.map((def) =>
     h(
@@ -1425,8 +1521,7 @@ function openLayers(keepScroll = false) {
         role: 'radio',
         'aria-checked': String(layerState.base === def.id),
         onClick: () => {
-          layerState.base = def.id;
-          applyLayers();
+          setBase(def.id);
           openLayers(true);
         }
       },
@@ -1434,51 +1529,32 @@ function openLayers(keepScroll = false) {
       def.name
     )
   );
-  const hist = (CONFIG.historical || []).map((d) => overlayRow({ ...d, kind: 'hist' }));
-  const presets = [
-    ['Hybryda: ortofoto + nazwy i adresy', 'orto', ['nazwy-emuia', 'adresy-kina']],
-    ['Ortofoto + LiDAR + nazwy', 'orto-nmt', ['nazwy-emuia']],
-    ['Sam LiDAR (cieniowanie)', 'nmt-base', []],
-    ['Mapa OSM', 'osm', []]
-  ];
-  const presetRow = h(
-    'div',
-    { class: 'opts' },
-    presets.map(([label, base, ons]) =>
-      h(
-        'button',
-        {
-          type: 'button',
-          class: 'opt',
-          onClick: () => {
-            layerState.base = base;
-            layerState.on = Object.fromEntries(ons.map((id) => [id, true]));
-            applyLayers();
-            openLayers(true);
-          }
-        },
-        label
-      )
-    )
-  );
+  const lidarOnly = layerState.base === 'nmt-base';
+  const hist = (CONFIG.historical || []).map(histRow);
   openSheet(
     'Warstwy mapy',
     [
-      h('div', { class: 'section' }, h('h3', null, 'Szybkie ustawienia'), presetRow),
       h('div', { class: 'section' }, h('h3', null, 'Podkład'), h('div', { role: 'radiogroup', class: 'section' }, base)),
-      h('div', { class: 'section' }, h('h3', null, 'Nakładki'), CONFIG.overlays.map((d) => overlayRow({ ...d, kind: 'overlay' }))),
       h(
         'div',
         { class: 'section' },
-        h('h3', null, 'Mapy historyczne'),
-        hist.length
-          ? hist
-          : h(
-              'p',
-              { class: 'hint' },
-              'Brak map historycznych. Po georeferencji dodasz je w pliku config.js (instrukcja w README, krok 5).'
-            )
-      )
+        h('h3', null, 'Dodatki'),
+        switchLine(
+          'Cieniowanie LiDAR na podkładzie',
+          lidarOnly ? ' (wybrany sam LiDAR)' : '',
+          lidarOnly || layerState.nmt,
+          lidarOnly,
+          () => {
+            toggleNmt();
+            openLayers(true);
+          }
+        ),
+        switchLine('Nazwy ulic, miejscowości i numery domów', '', layerState.names, false, () => {
+          toggleNames();
+          openLayers(true);
+        })
+      ),
+      hist.length && h('div', { class: 'section' }, h('h3', null, 'Mapy historyczne'), hist)
     ],
     keepScroll
   );
@@ -1747,6 +1823,8 @@ $('#btn-list').addEventListener('click', openList);
 $('#btn-add').addEventListener('click', () => openForm(null));
 $('#btn-rec').addEventListener('click', toggleRec);
 $('#btn-layers').addEventListener('click', () => openLayers());
+$('#btn-nmt').addEventListener('click', toggleNmt);
+$('#btn-names').addEventListener('click', toggleNames);
 $('#btn-menu').addEventListener('click', () => openMenu());
 $('#btn-locate').addEventListener('click', onLocate);
 $('#gps-chip').addEventListener('click', onChip);

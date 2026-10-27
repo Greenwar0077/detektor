@@ -15,6 +15,8 @@ export const CONFIG = {
   start: { lat: 52.1, lng: 19.4, zoom: 6 },
   maxZoom: 20,
 
+  // Podkłady widoczne w oknie Warstwy. Cieniowanie LiDAR (nmt-base) jest też nakładane
+  // na pozostałe podkłady przełącznikiem „LiDAR”.
   base: [
     {
       id: 'osm',
@@ -26,7 +28,7 @@ export const CONFIG = {
     },
     {
       id: 'orto',
-      name: 'Ortofotomapa (Geoportal)',
+      name: 'Ortofotomapa',
       type: 'wms',
       url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution',
       layers: 'Raster',
@@ -35,16 +37,16 @@ export const CONFIG = {
     },
     {
       id: 'orto-hr',
-      name: 'Ortofotomapa HR (Geoportal, tylko część kraju, często jak standardowa)',
+      name: 'Ortofotomapa HR (wysoka rozdzielczość, nie wszędzie)',
       type: 'wms',
       url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/HighResolution',
       layers: 'Raster',
       format: 'image/jpeg',
       attribution: '© GUGiK (geoportal.gov.pl)'
-    }
-    ,{
+    },
+    {
       id: 'nmt-base',
-      name: 'NMT: cieniowanie terenu jako podkład (LiDAR)',
+      name: 'Sam LiDAR (cieniowanie terenu)',
       type: 'wmts2180',
       url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMTS/ShadedRelief',
       layer: 'ISOK_Cien',
@@ -52,55 +54,12 @@ export const CONFIG = {
       minZoom: 9,
       maxNativeZoom: 19,
       attribution: '© GUGiK (geoportal.gov.pl)'
-    }
-    ,{
-      id: 'orto-nmt',
-      name: 'Ortofotomapa + NMT (LiDAR)',
-      type: 'wmts2180',
-      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMTS/ShadedRelief',
-      layer: 'ISOK_Cien',
-      format: 'image/jpeg',
-      under: {
-        type: 'wms',
-        url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution',
-        layers: 'Raster',
-        format: 'image/jpeg'
-      },
-      shadeAlpha: 0.8,
-      minZoom: 9,
-      maxNativeZoom: 19,
-      attribution: '© GUGiK (geoportal.gov.pl)'
-    }
-    ,{
-      id: 'osm-nmt',
-      name: 'Mapa OSM + NMT (LiDAR)',
-      type: 'wmts2180',
-      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMTS/ShadedRelief',
-      layer: 'ISOK_Cien',
-      format: 'image/jpeg',
-      under: { type: 'xyz', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png' },
-      shadeAlpha: 0.7,
-      minZoom: 9,
-      maxNativeZoom: 19,
-      attribution: '© GUGiK (geoportal.gov.pl), © OpenStreetMap'
     }
   ],
 
+  // Nazwy i adresy: włączane jednym przełącznikiem „Nazwy” (wszystkie wpisy naraz).
   overlays: [
     {
-      id: 'nmt',
-      name: 'NMT: cieniowanie jako nakładka (używa mix-blend, może nie działać wszędzie)',
-      type: 'wmts2180',
-      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMTS/ShadedRelief',
-      layer: 'ISOK_Cien',
-      format: 'image/jpeg',
-      blend: 'multiply',
-      minZoom: 9,
-      maxNativeZoom: 19,
-      opacity: 0.85,
-      attribution: '© GUGiK (geoportal.gov.pl)'
-    }
-    ,{
       id: 'nazwy-emuia',
       name: 'Nazwy: miejscowości, ulice, place (EMUiA GUGiK)',
       type: 'wms',
@@ -110,8 +69,8 @@ export const CONFIG = {
       transparent: true,
       version: '1.1.1',
       attribution: '© GUGiK (EMUiA)'
-    }
-    ,{
+    },
+    {
       id: 'adresy-kina',
       name: 'Adresy: numery domów i ulice (Geoportal)',
       type: 'wms',
@@ -121,14 +80,6 @@ export const CONFIG = {
       transparent: true,
       version: '1.3.0',
       attribution: '© GUGiK (PRG)'
-    }
-    ,{
-      id: 'nazwy-carto',
-      name: 'Nazwy (OpenStreetMap/CARTO), zapasowe',
-      type: 'xyz',
-      url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}.png',
-      maxNativeZoom: 19,
-      attribution: '© OpenStreetMap, © CARTO'
     }
   ],
 

@@ -57,28 +57,32 @@ export const CONFIG = {
     }
   ],
 
-  // Nazwy i adresy: włączane jednym przełącznikiem „Nazwy” (wszystkie wpisy naraz).
+  // Nazwy i adresy: włączane jednym przełącznikiem w oknie Warstwy (wszystkie wpisy naraz).
+  // Nazwy warstw i obsługa EPSG:3857 potwierdzone w GetCapabilities obu usług.
   overlays: [
     {
-      id: 'nazwy-emuia',
-      name: 'Nazwy: miejscowości, ulice, place (EMUiA GUGiK)',
+      id: 'nazwy-prng',
+      name: 'Nazwy: miejscowości i obiekty (PRNG GUGiK)',
       type: 'wms',
-      url: 'https://emuia.gugik.gov.pl/wmsproxy/emuia/wms',
-      layers: 'emuia:layer_miejscowosci_labels,emuia:layer_ulice_labels,emuia:layer_place_labels',
-      format: 'image/png',
-      transparent: true,
-      version: '1.1.1',
-      attribution: '© GUGiK (EMUiA)'
-    },
-    {
-      id: 'adresy-kina',
-      name: 'Adresy: numery domów i ulice (Geoportal)',
-      type: 'wms',
-      url: 'https://mapy.geoportal.gov.pl/wss/ext/KrajowaIntegracjaNumeracjiAdresowej',
-      layers: 'prg-ulice,prg-adresy',
+      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGiK/PRNG/WMS/GeographicalNames',
+      layers:
+        'M1_UrzedoweNazwyMiejscowosci,M2_PozostaleNazwyMiejscowosci,O1_UrzedoweNazwyObiektowFizjograficznych,O2_ZestandaryzowaneNazwyObiektowFizjograficznych',
       format: 'image/png',
       transparent: true,
       version: '1.3.0',
+      minZoom: 11,
+      attribution: '© GUGiK (PRNG)'
+    },
+    {
+      id: 'adresy-kina',
+      name: 'Ulice i numery domów (KINA GUGiK)',
+      type: 'wms',
+      url: 'https://mapy.geoportal.gov.pl/wss/ext/KrajowaIntegracjaNumeracjiAdresowej',
+      layers: 'A08_Ulice_Linie,A07_Punkty_adresowe', // punkty adresowe widać od skali 1:5000
+      format: 'image/png',
+      transparent: true,
+      version: '1.3.0',
+      minZoom: 15,
       attribution: '© GUGiK (PRG)'
     }
   ],

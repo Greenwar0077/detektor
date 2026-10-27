@@ -1,11 +1,12 @@
 // Detektor: mapa, GPS, znaleziska ze zdjęciami, ślady. Wszystko działa lokalnie w telefonie.
 import { CONFIG } from '../config.js';
 import * as store from './store.js';
+import { createWmts2180Layer } from './wmts2180.js';
 import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -207,7 +208,9 @@ function makeLayer(def) {
   if (def.maxNativeZoom) o.maxNativeZoom = def.maxNativeZoom;
   if (def.minZoom) o.minZoom = def.minZoom;
   let layer;
-  if (def.type === 'wms') {
+  if (def.type === 'wmts2180') {
+    layer = createWmts2180Layer(def, o);
+  } else if (def.type === 'wms') {
     const w = {
       ...o,
       layers: def.layers,

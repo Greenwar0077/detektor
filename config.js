@@ -45,12 +45,12 @@ export const CONFIG = {
     ,{
       id: 'nmt-base',
       name: 'NMT: cieniowanie terenu jako podkład (LiDAR)',
-      type: 'wms',
-      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief',
-      layers: 'Raster',
+      type: 'wmts2180',
+      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMTS/ShadedRelief',
+      layer: 'ISOK_Cien',
       format: 'image/jpeg',
-      version: '1.3.0',
-      crs: '4326',
+      minZoom: 9,
+      maxNativeZoom: 19,
       attribution: '© GUGiK (geoportal.gov.pl)'
     }
   ],
@@ -59,14 +59,14 @@ export const CONFIG = {
     {
       id: 'nmt',
       name: 'NMT: cieniowanie terenu (LiDAR)',
-      type: 'wms',
-      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief',
-      layers: 'Raster',
-      format: 'image/png',
-      transparent: true,
-      version: '1.3.0',
-      crs: '4326', // ta usługa nie obsługuje EPSG:3857 (potwierdzone w GetCapabilities)
-      opacity: 0.75,
+      type: 'wmts2180',
+      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMTS/ShadedRelief',
+      layer: 'ISOK_Cien',
+      format: 'image/jpeg',
+      blend: 'multiply',
+      minZoom: 9,
+      maxNativeZoom: 19,
+      opacity: 0.85,
       attribution: '© GUGiK (geoportal.gov.pl)'
     }
   ],

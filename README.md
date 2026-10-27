@@ -1,4 +1,4 @@
-# Detektor 0.1.0
+# Detektor 0.1.1
 
 Mapa + GPS + dziennik znalezisk dla poszukiwacza. Aplikacja webowa (PWA), instaluje się na Androidzie z Chrome. Dane zostają w telefonie.
 

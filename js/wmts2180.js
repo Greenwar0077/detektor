@@ -1,0 +1,207 @@
+// Warstwa kafelków WMTS w układzie PL-1992 (EPSG:2180) wyświetlana na mapie internetowej (EPSG:3857).
+// Geoportal wystawia cieniowanie NMT tylko w siatce PL-1992, więc każdy kafelek mapy składamy
+// z kafelków źródłowych, przeliczając współrzędne. Obrazy tylko rysujemy (bez odczytu pikseli),
+// dlatego nie jest potrzebna zgoda CORS serwera.
+import { toPuwg1992 } from './geo.js';
+
+const L = window.L;
+const PIXEL_M = 0.00028; // rozmiar piksela w definicji skali WMTS
+const ORIGIN_N = 850000; // TopLeftCorner: northing, easting (kolejność osi EPSG:2180)
+const ORIGIN_E = 100000;
+const SRC = 512; // rozmiar kafelka źródłowego
+
+// poziom: [mianownik skali, minKol, maxKol, minWiersz, maxWiersz] (z GetCapabilities usługi ShadedRelief)
+const LEVELS = [
+  [7559538.928571429, 0, 0, 0, 0],
+  [3779769.4642857146, 0, 1, 0, 1],
+  [1889884.7321428573, 0, 2, 0, 2],
+  [944942.3660714286, 0, 5, 0, 5],
+  [472471.1830357143, 0, 11, 0, 10],
+  [236235.59151785716, 1, 22, 1, 21],
+  [94494.23660714286, 4, 56, 4, 53],
+  [47247.11830357143, 9, 113, 9, 107],
+  [23623.559151785714, 19, 227, 19, 214],
+  [9449.423660714287, 47, 568, 47, 535],
+  [4724.711830357143, 95, 1136, 95, 1070],
+  [1889.8847321428573, 239, 2842, 239, 2675],
+  [944.9423660714286, 479, 5684, 479, 5351]
+].map(([sd, c0, c1, r0, r1]) => ({ pix: sd * PIXEL_M, c0, c1, r0, r1 }));
+
+function pickLevel(z, lat) {
+  const target = (156543.03392804097 / Math.pow(2, z)) * Math.cos((lat * Math.PI) / 180);
+  for (let i = 0; i < LEVELS.length; i++) {
+    if (LEVELS[i].pix <= target * 1.5) return i;
+  }
+  return LEVELS.length - 1;
+}
+
+// Punkt kafelka mapy (piksele u,v) -> współrzędne "globalne" siatki źródłowej danego poziomu.
+function toGlobal(z, tx, ty, u, v, pix) {
+  const ll = L.CRS.EPSG3857.pointToLatLng(L.point(tx * 256 + u, ty * 256 + v), z);
+  const p = toPuwg1992(ll.lat, ll.lng); // x = northing, y = easting
+  return { gx: (p.y - ORIGIN_E) / pix, gy: (ORIGIN_N - p.x) / pix };
+}
+
+function affine(d, g) {
+  // d, g: po 3 punkty. Zwraca [a,b,c,d,e,f] dla canvas.setTransform (global -> piksele kafelka).
+  const g1x = g[1].gx - g[0].gx;
+  const g1y = g[1].gy - g[0].gy;
+  const g2x = g[2].gx - g[0].gx;
+  const g2y = g[2].gy - g[0].gy;
+  const det = g1x * g2y - g2x * g1y;
+  if (!det) return null;
+  const d1x = d[1].x - d[0].x;
+  const d1y = d[1].y - d[0].y;
+  const d2x = d[2].x - d[0].x;
+  const d2y = d[2].y - d[0].y;
+  // A = D * G^-1, G = [[g1x g2x],[g1y g2y]]
+  const A00 = (d1x * g2y - d2x * g1y) / det;
+  const A01 = (d2x * g1x - d1x * g2x) / det;
+  const A10 = (d1y * g2y - d2y * g1y) / det;
+  const A11 = (d2y * g1x - d1y * g2x) / det;
+  const e = d[0].x - (A00 * g[0].gx + A01 * g[0].gy);
+  const f = d[0].y - (A10 * g[0].gx + A11 * g[0].gy);
+  return [A00, A10, A01, A11, e, f];
+}
+
+function expand(tri, px) {
+  const cx = (tri[0].x + tri[1].x + tri[2].x) / 3;
+  const cy = (tri[0].y + tri[1].y + tri[2].y) / 3;
+  return tri.map((p) => {
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    return { x: p.x + (dx / len) * px, y: p.y + (dy / len) * px };
+  });
+}
+
+function loadImage(url) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+export function createWmts2180Layer(def, options) {
+  const Layer = L.GridLayer.extend({
+    createTile(coords, done) {
+      const tile = document.createElement('canvas');
+      const r = (window.devicePixelRatio || 1) >= 1.5 ? 2 : 1;
+      tile.width = tile.height = 256 * r;
+      tile.style.width = tile.style.height = '256px';
+      this._draw(tile, coords, r).then(
+        (ok) => done(ok ? null : new Error('brak kafelków'), tile),
+        (e) => done(e, tile)
+      );
+      return tile;
+    },
+
+    async _draw(tile, coords, r) {
+      const { x: tx, y: ty, z } = coords;
+      const center = L.CRS.EPSG3857.pointToLatLng(L.point(tx * 256 + 128, ty * 256 + 128), z);
+      const li = pickLevel(z, center.lat);
+      const lv = LEVELS[li];
+      const n = z >= 14 ? 1 : 4; // przy małych zoomach dzielimy kafelek na siatkę n×n
+      const step = 256 / n;
+
+      // punkty siatki
+      const dp = [];
+      const gp = [];
+      for (let j = 0; j <= n; j++) {
+        dp.push([]);
+        gp.push([]);
+        for (let i = 0; i <= n; i++) {
+          dp[j].push({ x: i * step, y: j * step });
+          gp[j].push(toGlobal(z, tx, ty, i * step, j * step, lv.pix));
+        }
+      }
+
+      // jakie kafelki źródłowe są potrzebne
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const row of gp) {
+        for (const p of row) {
+          minX = Math.min(minX, p.gx);
+          maxX = Math.max(maxX, p.gx);
+          minY = Math.min(minY, p.gy);
+          maxY = Math.max(maxY, p.gy);
+        }
+      }
+      const c0 = Math.max(lv.c0, Math.floor(minX / SRC));
+      const c1 = Math.min(lv.c1, Math.floor(maxX / SRC));
+      const r0 = Math.max(lv.r0, Math.floor(minY / SRC));
+      const r1 = Math.min(lv.r1, Math.floor(maxY / SRC));
+      if (c1 < c0 || r1 < r0) return true; // poza zasięgiem usługi: pusty kafelek, nie błąd
+      if ((c1 - c0 + 1) * (r1 - r0 + 1) > 16) return false;
+
+      const jobs = [];
+      for (let row = r0; row <= r1; row++) {
+        for (let col = c0; col <= c1; col++) {
+          const url =
+            `${def.url}?service=WMTS&request=GetTile&version=1.0.0&layer=${encodeURIComponent(def.layer)}` +
+            `&style=default&format=${encodeURIComponent(def.format || 'image/jpeg')}` +
+            `&TileMatrixSet=EPSG:2180&TileMatrix=EPSG:2180:${li}&TileRow=${row}&TileCol=${col}`;
+          jobs.push(loadImage(url).then((img) => ({ img, col, row })));
+        }
+      }
+      const loaded = await Promise.all(jobs);
+      const got = loaded.filter((t) => t.img);
+      if (!got.length) return false;
+
+      const ctx = tile.getContext('2d');
+      for (let j = 0; j < n; j++) {
+        for (let i = 0; i < n; i++) {
+          const tris = [
+            [[i, j], [i + 1, j], [i, j + 1]],
+            [[i + 1, j], [i + 1, j + 1], [i, j + 1]]
+          ];
+          for (const t of tris) {
+            const d = t.map(([a, b]) => dp[b][a]);
+            const g = t.map(([a, b]) => gp[b][a]);
+            const m = affine(d, g);
+            if (!m) continue;
+            const clip = expand(d, 1.2);
+            for (const { img, col, row } of got) {
+              ctx.save();
+              ctx.setTransform(r, 0, 0, r, 0, 0);
+              ctx.beginPath();
+              ctx.moveTo(clip[0].x, clip[0].y);
+              ctx.lineTo(clip[1].x, clip[1].y);
+              ctx.lineTo(clip[2].x, clip[2].y);
+              ctx.closePath();
+              ctx.clip();
+              const [a, b, c, dd, e, f] = m;
+              const ox = col * SRC;
+              const oy = row * SRC;
+              ctx.setTransform(
+                r * a,
+                r * b,
+                r * c,
+                r * dd,
+                r * (e + a * ox + c * oy),
+                r * (f + b * ox + dd * oy)
+              );
+              ctx.drawImage(img, -0.5, -0.5, SRC + 1, SRC + 1); // lekki zakład: bez szwów między kafelkami
+              ctx.restore();
+            }
+          }
+        }
+      }
+      return true;
+    }
+  });
+
+  const layer = new Layer({ ...options, tileSize: 256 });
+  if (def.blend) {
+    layer.on('add', () => {
+      const c = layer.getContainer();
+      if (c) c.style.mixBlendMode = def.blend;
+    });
+  }
+  return layer;
+}

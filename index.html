@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Detektor</title>
+  <meta name="theme-color" content="#162a23">
+  <meta name="description" content="Mapa, GPS i dziennik znalezisk dla poszukiwaczy z wykrywaczem metali.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="lib/leaflet/leaflet.css">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="map" role="application" aria-label="Mapa"></div>
+
+  <div id="crosshair" class="crosshair" hidden aria-hidden="true"><i></i><i></i></div>
+
+  <button id="gps-chip" class="gps-chip" type="button" data-state="off" aria-label="Stan GPS">
+    <span class="gps-dot"></span>
+    <span class="gps-lines">
+      <span id="gps-text" class="gps-text">GPS wyłączony</span>
+      <span id="gps-coords" class="gps-coords" hidden></span>
+    </span>
+  </button>
+
+  <div class="side">
+    <button id="btn-locate" class="round" type="button" aria-label="Pokaż moją pozycję (GPS)"></button>
+    <button id="btn-layers" class="round" type="button" aria-label="Warstwy mapy"></button>
+    <button id="btn-menu" class="round" type="button" aria-label="Menu i dane"></button>
+  </div>
+
+  <nav class="bottombar" aria-label="Główne akcje">
+    <button id="btn-list" class="bar-btn" type="button"></button>
+    <button id="btn-add" class="fab" type="button"></button>
+    <button id="btn-rec" class="bar-btn" type="button"></button>
+  </nav>
+
+  <div id="pickbar" class="pickbar" hidden>
+    <button id="pick-cancel" class="btn" type="button">Anuluj</button>
+    <button id="pick-ok" class="btn primary" type="button">Użyj tego miejsca</button>
+  </div>
+
+  <div id="backdrop" class="backdrop" hidden></div>
+  <section id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <header class="sheet-head">
+      <h2 id="sheet-title"></h2>
+      <button id="sheet-close" class="round small" type="button" aria-label="Zamknij"></button>
+    </header>
+    <div id="sheet-body" class="sheet-body"></div>
+  </section>
+
+  <div id="viewer" class="viewer" hidden>
+    <img id="viewer-img" alt="Zdjęcie znaleziska">
+    <button id="viewer-close" class="round" type="button" aria-label="Zamknij zdjęcie"></button>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="lib/leaflet/leaflet.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -35,11 +35,22 @@ export const CONFIG = {
     },
     {
       id: 'orto-hr',
-      name: 'Ortofotomapa HR ≤ 10 cm (Geoportal, nie wszędzie)',
+      name: 'Ortofotomapa HR (Geoportal, tylko część kraju, często jak standardowa)',
       type: 'wms',
       url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/HighResolution',
       layers: 'Raster',
       format: 'image/jpeg',
+      attribution: '© GUGiK (geoportal.gov.pl)'
+    }
+    ,{
+      id: 'nmt-base',
+      name: 'NMT: cieniowanie terenu jako podkład (LiDAR)',
+      type: 'wms',
+      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief',
+      layers: 'Raster',
+      format: 'image/jpeg',
+      version: '1.3.0',
+      crs: '4326',
       attribution: '© GUGiK (geoportal.gov.pl)'
     }
   ],
@@ -53,6 +64,8 @@ export const CONFIG = {
       layers: 'Raster',
       format: 'image/png',
       transparent: true,
+      version: '1.3.0',
+      crs: '4326', // ta usługa nie obsługuje EPSG:3857 (potwierdzone w GetCapabilities)
       opacity: 0.75,
       attribution: '© GUGiK (geoportal.gov.pl)'
     }

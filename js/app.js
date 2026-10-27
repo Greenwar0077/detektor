@@ -208,14 +208,17 @@ function makeLayer(def) {
   if (def.minZoom) o.minZoom = def.minZoom;
   let layer;
   if (def.type === 'wms') {
-    layer = L.tileLayer.wms(def.url, {
+    const w = {
       ...o,
       layers: def.layers,
       styles: def.styles || '',
       format: def.format || 'image/png',
       transparent: !!def.transparent,
       version: def.version || '1.1.1'
-    });
+    };
+    // Część usług Geoportalu (np. NMT) nie zna EPSG:3857: pytamy je w EPSG:4326.
+    if (def.crs === '4326') w.crs = L.CRS.EPSG4326;
+    layer = L.tileLayer.wms(def.url, w);
   } else if (def.type === 'image') {
     layer = L.imageOverlay(def.url, def.bounds, o);
   } else {

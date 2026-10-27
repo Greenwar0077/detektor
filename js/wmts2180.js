@@ -75,6 +75,18 @@ function expand(tri, px) {
   });
 }
 
+function compose(tile, alpha) {
+  const m = tile._mix;
+  const out = tile.getContext('2d');
+  out.clearRect(0, 0, tile.width, tile.height);
+  if (m.underImg) out.drawImage(m.underImg, 0, 0, tile.width, tile.height);
+  out.save();
+  out.globalCompositeOperation = m.underImg ? 'multiply' : 'source-over';
+  out.globalAlpha = alpha;
+  out.drawImage(m.shade, 0, 0);
+  out.restore();
+}
+
 function loadImage(url) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -220,19 +232,23 @@ export function createWmts2180Layer(def, options) {
         }
       }
       if (mix) {
-        const out = tile.getContext('2d');
-        if (underImg) out.drawImage(underImg, 0, 0, tile.width, tile.height);
-        out.save();
-        out.globalCompositeOperation = underImg ? 'multiply' : 'source-over';
-        out.globalAlpha = def.shadeAlpha ?? 0.8;
-        out.drawImage(shade, 0, 0);
-        out.restore();
+        tile._mix = { underImg, shade };
+        compose(tile, this.options.shadeAlpha ?? 0.8);
       }
       return true;
+    },
+
+    // zmiana siły cieniowania na żywo, bez ponownego pobierania kafelków
+    setShadeAlpha(alpha) {
+      this.options.shadeAlpha = alpha;
+      for (const k in this._tiles) {
+        const t = this._tiles[k].el;
+        if (t && t._mix) compose(t, alpha);
+      }
     }
   });
 
-  const layer = new Layer({ ...options, tileSize: 256 });
+  const layer = new Layer({ ...options, tileSize: 256, shadeAlpha: def.shadeAlpha });
   if (def.blend) {
     layer.on('add', () => {
       const c = layer.getContainer();

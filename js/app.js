@@ -6,7 +6,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.1.3';
+const VERSION = '0.1.4';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -154,10 +154,7 @@ const S = {
 $('#btn-locate').append(icon('locate'));
 $('#btn-layers').append(icon('layers'));
 // Szybkie przełączniki na mapie: cieniowanie LiDAR i nazwy ulic
-for (const [id, label, text] of [
-  ['btn-names', 'Nazwy ulic i miejscowości: włącz lub wyłącz', 'Aa'],
-  ['btn-nmt', 'Cieniowanie LiDAR: włącz lub wyłącz', 'LiDAR']
-]) {
+for (const [id, label, text] of [['btn-nmt', 'Cieniowanie LiDAR: włącz lub wyłącz', 'LiDAR']]) {
   const b = h('button', { id, class: 'round quick', type: 'button', 'aria-label': label }, h('span', null, text));
   $('#btn-layers').after(b);
 }
@@ -229,6 +226,7 @@ const layerState = (() => {
     base: CONFIG.base.some((b) => b.id === s.base) ? s.base : CONFIG.base[0].id,
     last: CONFIG.base.some((b) => b.id === s.last && b.id !== 'nmt-base') ? s.last : 'orto',
     nmt: !!s.nmt,
+    nmtAlpha: Number.isFinite(s.nmtAlpha) ? Math.min(1, Math.max(0.1, s.nmtAlpha)) : 0.8,
     names: !!s.names,
     hist: s.hist && typeof s.hist === 'object' ? s.hist : {},
     opacity: s.opacity && typeof s.opacity === 'object' ? s.opacity : {}
@@ -253,7 +251,7 @@ function makeLayer(def) {
   if (def.minZoom) o.minZoom = def.minZoom;
   let layer;
   if (def.type === 'wmts2180') {
-    layer = createWmts2180Layer(def, o);
+    layer = createWmts2180Layer(def.under ? { ...def, shadeAlpha: layerState.nmtAlpha } : def, o);
   } else if (def.type === 'wms') {
     const w = {
       ...o,
@@ -1549,6 +1547,28 @@ function openLayers(keepScroll = false) {
             openLayers(true);
           }
         ),
+        !lidarOnly &&
+          layerState.nmt &&
+          h(
+            'label',
+            { class: 'hint slider-line' },
+            `Siła cieniowania: ${Math.round(layerState.nmtAlpha * 100)}%`,
+            h('input', {
+              type: 'range',
+              min: '0.1',
+              max: '1',
+              step: '0.05',
+              'aria-label': 'Siła cieniowania LiDAR',
+              props: { value: String(layerState.nmtAlpha) },
+              onInput: (e) => {
+                const v = Number(e.target.value);
+                layerState.nmtAlpha = v;
+                e.target.parentNode.firstChild.nodeValue = `Siła cieniowania: ${Math.round(v * 100)}%`;
+                for (const [id, l] of layerObjs) if (id.endsWith('-nmt') && l.setShadeAlpha) l.setShadeAlpha(v);
+                LS.set('layers', layerState);
+              }
+            })
+          ),
         switchLine('Nazwy ulic, miejscowości i numery domów', '', layerState.names, false, () => {
           toggleNames();
           openLayers(true);
@@ -1824,7 +1844,6 @@ $('#btn-add').addEventListener('click', () => openForm(null));
 $('#btn-rec').addEventListener('click', toggleRec);
 $('#btn-layers').addEventListener('click', () => openLayers());
 $('#btn-nmt').addEventListener('click', toggleNmt);
-$('#btn-names').addEventListener('click', toggleNames);
 $('#btn-menu').addEventListener('click', () => openMenu());
 $('#btn-locate').addEventListener('click', onLocate);
 $('#gps-chip').addEventListener('click', onChip);

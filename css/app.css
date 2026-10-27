@@ -347,3 +347,6 @@ a.btn:visited { color: var(--ink); }
 .round.quick span { line-height: 1; }
 #btn-names span { font-size: 15px; }
 .switch small.hint { display: block; margin-top: 2px; }
+
+.slider-line { display: block; padding: 4px 0 10px; }
+.slider-line input[type=range] { width: 100%; margin-top: 6px; }

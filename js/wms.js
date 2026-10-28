@@ -1,5 +1,5 @@
 // Warstwa WMS z kolejką i ponawianiem nieudanych kafelków (patrz tilequeue.js).
-import { enqueue, noteError, withRetry, backoff, MAX_TRIES, stats } from './tilequeue.js';
+import { enqueue, noteError, withRetry, backoff, MAX_TRIES, stats, watch } from './tilequeue.js';
 
 const L = window.L;
 
@@ -19,12 +19,36 @@ const retryTile = {
               finish(); // kafelek już niepotrzebny (przesunięto mapę)
               return;
             }
+            let over = false;
+            const stop = watch(tile, (gone) => {
+              if (over) return;
+              over = true;
+              tile.onload = tile.onerror = null;
+              finish(); // zwalniamy miejsce w kolejce
+              if (gone) return; // kafelek już niepotrzebny
+              tile.src = '';
+              retry();
+            }, true);
+            const retry = () => {
+              noteError();
+              if (++n < MAX_TRIES) {
+                stats.retries++;
+                setTimeout(attempt, backoff(n));
+              } else {
+                stats.failed++;
+                done(new Error('kafelek'), tile);
+              }
+            };
             tile.onload = () => {
+              over = true;
+              stop();
               stats.ok++;
               finish();
               done(null, tile);
             };
             tile.onerror = () => {
+              over = true;
+              stop();
               finish();
               noteError();
               if (++n < MAX_TRIES) {

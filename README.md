@@ -1,4 +1,4 @@
-# Detektor 0.4.0
+# Detektor 0.4.3
 
 Mapa + GPS + dziennik znalezisk dla poszukiwacza. Aplikacja webowa (PWA), instaluje się na Androidzie z Chrome. Dane zostają w telefonie.
 
@@ -65,6 +65,7 @@ icons/
 
 ## Nowości w 0.4.0 / 0.4.1
 
+- **0.4.3**: ortofotomapa HR przez WMTS (EPSG:2180, przeliczany jak LiDAR), usunięta wolna ortofotomapa WMS. HR nie ma wariantu z LiDAR-em. **0.4.2**: naprawa zawieszającej się kolejki kafelków.
 - **0.4.1**: ortofotomapa przez WMTS (gotowe kafelki, szybciej); stara wersja WMS zostaje jako „zapasowa”.
 
 - **Szybsza i pewniejsza mapa**: kafelki Geoportalu idą przez kolejkę (4 naraz) z ponawianiem po błędzie, a obejrzane kafelki zapisują się w telefonie (do ok. 4000), więc kolejne wejście na ten sam teren ładuje się od razu. Jakość ortofotomapy bez zmian.

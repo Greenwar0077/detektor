@@ -11,29 +11,58 @@ const ORIGIN_N = 850000; // TopLeftCorner: northing, easting (kolejność osi EP
 const ORIGIN_E = 100000;
 const SRC = 512; // rozmiar kafelka źródłowego
 
-// poziom: [mianownik skali, minKol, maxKol, minWiersz, maxWiersz] (z GetCapabilities usługi ShadedRelief)
-const LEVELS = [
-  [7559538.928571429, 0, 0, 0, 0],
-  [3779769.4642857146, 0, 1, 0, 1],
-  [1889884.7321428573, 0, 2, 0, 2],
-  [944942.3660714286, 0, 5, 0, 5],
-  [472471.1830357143, 0, 11, 0, 10],
-  [236235.59151785716, 1, 22, 1, 21],
-  [94494.23660714286, 4, 56, 4, 53],
-  [47247.11830357143, 9, 113, 9, 107],
-  [23623.559151785714, 19, 227, 19, 214],
-  [9449.423660714287, 47, 568, 47, 535],
-  [4724.711830357143, 95, 1136, 95, 1070],
-  [1889.8847321428573, 239, 2842, 239, 2675],
-  [944.9423660714286, 479, 5684, 479, 5351]
-].map(([sd, c0, c1, r0, r1]) => ({ pix: sd * PIXEL_M, c0, c1, r0, r1 }));
+// poziom: [id w usłudze, mianownik skali, minKol, maxKol, minWiersz, maxWiersz] (z GetCapabilities)
+const mk = (rows) => rows.map(([id, sd, c0, c1, r0, r1]) => ({ id, pix: sd * PIXEL_M, c0, c1, r0, r1 }));
 
-function pickLevel(z, lat) {
+// Cieniowanie NMT (ShadedRelief): numeracja poziomów zaczyna się od skali 1:7,56 mln.
+const NMT_LEVELS = mk(
+  [
+    [7559538.928571429, 0, 0, 0, 0],
+    [3779769.4642857146, 0, 1, 0, 1],
+    [1889884.7321428573, 0, 2, 0, 2],
+    [944942.3660714286, 0, 5, 0, 5],
+    [472471.1830357143, 0, 11, 0, 10],
+    [236235.59151785716, 1, 22, 1, 21],
+    [94494.23660714286, 4, 56, 4, 53],
+    [47247.11830357143, 9, 113, 9, 107],
+    [23623.559151785714, 19, 227, 19, 214],
+    [9449.423660714287, 47, 568, 47, 535],
+    [4724.711830357143, 95, 1136, 95, 1070],
+    [1889.8847321428573, 239, 2842, 239, 2675],
+    [944.9423660714286, 479, 5684, 479, 5351]
+  ].map((r, i) => [i, ...r])
+);
+
+// Ortofotomapa HR (ORTO/WMTS/HighResolution): poziomy 5-16, zakresy z GetCapabilities.
+const HR_LEVELS = mk([
+  [5, 944942.3660714286, 0, 44, 0, 119],
+  [6, 472471.1830357143, 0, 88, 0, 238],
+  [7, 236235.59151785716, 0, 177, 0, 476],
+  [8, 94494.23660714286, 0, 444, 0, 1191],
+  [9, 47247.11830357143, 0, 888, 0, 2383],
+  [10, 23623.559151785714, 0, 1777, 0, 4767],
+  [11, 9449.423660714287, 0, 4443, 0, 11918],
+  [12, 4724.711830357143, 0, 8886, 0, 23836],
+  [13, 1889.8847321428573, 0, 22216, 0, 59590],
+  [14, 944.9423660714286, 0, 44432, 0, 119180],
+  [15, 472.4711830357143, 0, 88864, 0, 238360],
+  [16, 236.23559151785716, 0, 177728, 0, 476720]
+]);
+
+// tol: ile razy grubszy od ekranu może być piksel źródła (1 = nie gorszy niż ekran).
+const PROFILES = {
+  nmt: { levels: NMT_LEVELS, tol: 1.5 },
+  hr: { levels: HR_LEVELS, tol: 1 }
+};
+const profileOf = (def) => PROFILES[def.profile] || PROFILES.nmt;
+
+function pickLevel(prof, z, lat) {
   const target = (156543.03392804097 / Math.pow(2, z)) * Math.cos((lat * Math.PI) / 180);
-  for (let i = 0; i < LEVELS.length; i++) {
-    if (LEVELS[i].pix <= target * 1.5) return i;
+  const L2 = prof.levels;
+  for (let i = 0; i < L2.length; i++) {
+    if (L2[i].pix <= target * prof.tol) return i;
   }
-  return LEVELS.length - 1;
+  return L2.length - 1;
 }
 
 // Punkt kafelka mapy (piksele u,v) -> współrzędne "globalne" siatki źródłowej danego poziomu.
@@ -119,10 +148,11 @@ function underUrl(under, z, tx, ty, px) {
 }
 
 // Które kafelki źródłowe (PL-1992) potrzebne są do narysowania kafelka mapy.
-function plan(z, tx, ty) {
+function plan(def, z, tx, ty) {
+  const prof = profileOf(def);
   const center = L.CRS.EPSG3857.pointToLatLng(L.point(tx * 256 + 128, ty * 256 + 128), z);
-  const li = pickLevel(z, center.lat);
-  const lv = LEVELS[li];
+  const li = pickLevel(prof, z, center.lat);
+  const lv = prof.levels[li];
   const n = z >= 14 ? 1 : 4; // przy małych zoomach dzielimy kafelek na siatkę n×n
   const step = 256 / n;
   const dp = [];
@@ -157,7 +187,7 @@ function plan(z, tx, ty) {
 const srcUrl = (def, li, row, col) =>
   `${def.url}?service=WMTS&request=GetTile&version=1.0.0&layer=${encodeURIComponent(def.layer)}` +
   `&style=default&format=${encodeURIComponent(def.format || 'image/jpeg')}` +
-  `&TileMatrixSet=EPSG:2180&TileMatrix=EPSG:2180:${li}&TileRow=${row}&TileCol=${col}`;
+  `&TileMatrixSet=EPSG:2180&TileMatrix=EPSG:2180:${profileOf(def).levels[li].id}&TileRow=${row}&TileCol=${col}`;
 
 export function createWmts2180Layer(def, options) {
   const Layer = L.GridLayer.extend({
@@ -175,7 +205,7 @@ export function createWmts2180Layer(def, options) {
 
     async _draw(tile, coords, r) {
       const { x: tx, y: ty, z } = coords;
-      const { li, n, dp, gp, c0, c1, r0, r1 } = plan(z, tx, ty);
+      const { li, n, dp, gp, c0, c1, r0, r1 } = plan(def, z, tx, ty);
       if (c1 < c0 || r1 < r0) return true; // poza zasięgiem usługi: pusty kafelek, nie błąd
       if ((c1 - c0 + 1) * (r1 - r0 + 1) > 16) return false;
 
@@ -249,7 +279,7 @@ export function createWmts2180Layer(def, options) {
     // adresy wszystkich plików potrzebnych do narysowania kafelka (do zapisu offline)
     urlsFor(coords) {
       const out = [];
-      const { li, c0, c1, r0, r1 } = plan(coords.z, coords.x, coords.y);
+      const { li, c0, c1, r0, r1 } = plan(def, coords.z, coords.x, coords.y);
       if (c1 >= c0 && r1 >= r0 && (c1 - c0 + 1) * (r1 - r0 + 1) <= 16) {
         for (let row = r0; row <= r1; row++) for (let col = c0; col <= c1; col++) out.push(srcUrl(def, li, row, col));
       }

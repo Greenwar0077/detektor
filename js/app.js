@@ -9,7 +9,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.4.2';
+const VERSION = '0.4.3';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -257,7 +257,8 @@ const layerState = (() => {
 
 function effectiveBase() {
   if (layerState.base === 'nmt-base' || !layerState.nmt) return layerState.base;
-  return layerState.base + '-nmt';
+  const comb = layerState.base + '-nmt';
+  return ALL_DEFS.some((d) => d.id === comb) ? comb : layerState.base;
 }
 
 function makeLayer(def) {

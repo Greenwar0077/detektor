@@ -36,21 +36,15 @@ export const CONFIG = {
       attribution: '© GUGiK (geoportal.gov.pl)'
     },
     {
-      id: 'orto-wms',
-      name: 'Ortofotomapa (WMS, zapasowa, wolniejsza)',
-      type: 'wms',
-      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution',
-      layers: 'Raster',
-      format: 'image/jpeg',
-      attribution: '© GUGiK (geoportal.gov.pl)'
-    },
-    {
       id: 'orto-hr',
       name: 'Ortofotomapa HR (wysoka rozdzielczość, nie wszędzie)',
-      type: 'wms',
-      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/HighResolution',
-      layers: 'Raster',
+      // WMTS tylko w EPSG:2180 (kafelki 512 px), przeliczany na mapę internetową jak LiDAR.
+      type: 'wmts2180',
+      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMTS/HighResolution',
+      layer: 'ORTOFOTOMAPA',
+      profile: 'hr',
       format: 'image/jpeg',
+      maxNativeZoom: 19,
       attribution: '© GUGiK (geoportal.gov.pl)'
     },
     {

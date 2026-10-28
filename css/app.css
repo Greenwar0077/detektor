@@ -442,3 +442,7 @@ body.aligning .curtain { display: none; }
 .base-tile .thumb { display: block; width: 100%; aspect-ratio: 16 / 10; border-radius: 8px; background-size: cover; background-position: center; }
 .base-tile .cap { padding: 0 2px 2px; }
 .base-tile[aria-checked="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+.chip-btn { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); font-size: 13px; font-weight: 600; }
+.chip-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sheet-body input[type="search"] { width: 100%; min-height: 48px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: inherit; font: inherit; }

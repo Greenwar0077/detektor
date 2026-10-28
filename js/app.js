@@ -9,7 +9,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.6.2';
+const VERSION = '0.7.0';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -1614,12 +1614,24 @@ function pinListNode(pins, emptyText) {
   );
 }
 
-function openList() {
-  const pins = [...S.pins.values()].sort((a, b) => b.ts - a.ts);
-  openSheet(`Wszystkie znaleziska (${pins.length})`, [
-    h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn', onClick: () => openOutings() }, '← Wyjścia')),
-    pinListNode(pins, 'Brak znalezisk.')
-  ]);
+let listCat = null;
+function openList(keepScroll = false) {
+  const all = [...S.pins.values()].sort((a, b) => b.ts - a.ts);
+  const cats = new Map();
+  for (const p of all) cats.set(p.cat, (cats.get(p.cat) || 0) + 1);
+  if (listCat && !cats.has(listCat)) listCat = null;
+  const pins = listCat ? all.filter((p) => p.cat === listCat) : all;
+  const chip = (id, label) =>
+    h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(listCat === id), onClick: () => { listCat = id; openList(true); } }, label);
+  openSheet(
+    `Wszystkie znaleziska (${pins.length}${listCat ? ` z ${all.length}` : ''})`,
+    [
+      h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn', onClick: () => openOutings() }, '← Wyjścia')),
+      cats.size > 1 && h('div', { class: 'chips' }, chip(null, 'Wszystkie'), [...cats.entries()].sort((x, y) => y[1] - x[1]).map(([c, n]) => chip(c, `${catLabel(c)} ×${n}`))),
+      pinListNode(pins, 'Brak znalezisk.')
+    ],
+    keepScroll
+  );
 }
 
 /* ------------------------------------------------------------------ wyjścia: biblioteka i szczegóły */
@@ -2420,7 +2432,7 @@ function openLayers(keepScroll = false) {
   openSheet(
     'Warstwy mapy',
     [
-      fold('l:base', 'Podkład', BASE_SHORT[layerState.base] || '', h('div', { role: 'radiogroup', class: 'base-grid' }, base)),
+      h('div', { class: 'section' }, h('h3', null, 'Podkład'), h('div', { role: 'radiogroup', class: 'base-grid' }, base)),
       fold(
         'l:extras',
         'Dodatki',
@@ -2606,6 +2618,39 @@ function switchRow(label, key, onChange) {
   return h('div', { class: 'switch' }, h('span', null, label), btn);
 }
 
+function parseLatLng(q) {
+  const m = q.trim().replace(/,/g, ' ').match(/^(-?\d{1,2}[.]\d+)\s+(-?\d{1,3}[.]\d+)$/);
+  if (!m) return null;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  return a >= 48 && a <= 56 && b >= 13 && b <= 25 ? [a, b] : null;
+}
+function searchNode() {
+  const out = h('div', { class: 'list' });
+  const input = h('input', { type: 'search', placeholder: 'Wieś, las albo współrzędne (51.25, 22.57)', autocomplete: 'off', 'aria-label': 'Szukaj miejsca' });
+  const go = (lat, lng, z = 16) => {
+    closeSheet();
+    map.setView([lat, lng], z);
+  };
+  const run = async () => {
+    const q = input.value.trim();
+    if (!q) return;
+    const ll = parseLatLng(q);
+    if (ll) return go(ll[0], ll[1], 17);
+    out.replaceChildren(h('p', { class: 'hint' }, 'Szukam…'));
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=pl&accept-language=pl&q=${encodeURIComponent(q)}`);
+      const j = await r.json();
+      if (!j.length) return out.replaceChildren(h('p', { class: 'hint' }, 'Nic nie znaleziono.'));
+      out.replaceChildren(...j.map((x) => h('button', { type: 'button', class: 'item', onClick: () => go(Number(x.lat), Number(x.lon), 15) }, h('span', { class: 'ph' }, icon('pin', 22)), h('span', null, h('div', { class: 't' }, x.display_name.split(',').slice(0, 2).join(',')), h('div', { class: 's' }, x.display_name.split(',').slice(2, 5).join(','))))));
+    } catch (e) {
+      out.replaceChildren(h('p', { class: 'hint' }, 'Brak internetu albo wyszukiwarka nie odpowiada. Współrzędne zadziałają bez sieci.'));
+    }
+  };
+  input.addEventListener('keydown', (e) => e.key === 'Enter' && run());
+  return h('div', { class: 'section' }, input, h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn primary', onClick: run }, 'Szukaj')), out);
+}
+
 async function openMenu(keepScroll = false) {
   const info = await store.storageInfo();
   const photoCount = [...S.pins.values()].reduce((n, p) => n + (p.photos ? p.photos.length : 0), 0);
@@ -2671,6 +2716,7 @@ async function openMenu(keepScroll = false) {
         ),
         h('p', { class: 'hint' }, 'To eksport wszystkich wyjść naraz (bez zdjęć). Pojedyncze wyjście wyeksportujesz z jego karty.')
       ),
+      fold('m:search', 'Szukaj miejsca', '', searchNode()),
       fold(
         'm:outings',
         'Wyjścia',
@@ -3407,7 +3453,11 @@ function showMapMenu(ll) {
     { class: 'ctx' },
     h('div', { class: 'hint' }, `${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)}`),
     h('button', { type: 'button', class: 'btn primary', onClick: () => { close(); addPlaceAt(ll); } }, icon('pin', 18), 'Dodaj miejsce tutaj'),
-    h('button', { type: 'button', class: 'btn', onClick: () => { close(); openForm(null, { lat: ll.lat, lng: ll.lng, acc: null, src: 'pick' }); } }, icon('plus', 18), 'Dodaj znalezisko tutaj')
+    h('button', { type: 'button', class: 'btn', onClick: () => { close(); openForm(null, { lat: ll.lat, lng: ll.lng, acc: null, src: 'pick' }); } }, icon('plus', 18), 'Dodaj znalezisko tutaj'),
+    h('div', { class: 'row-actions' },
+      h('a', { class: 'btn', href: `geo:${ll.lat},${ll.lng}?q=${ll.lat},${ll.lng}` }, icon('nav', 18), 'Nawiguj'),
+      h('button', { type: 'button', class: 'btn', onClick: () => { close(); copyText(fmtLL(ll.lat, ll.lng), 'Skopiowano współrzędne.'); } }, icon('copy', 18), 'Kopiuj')
+    )
   );
   L.popup({ closeButton: false, className: 'ctx-popup', minWidth: 200 }).setLatLng(ll).setContent(box).openOn(map);
 }

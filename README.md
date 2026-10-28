@@ -1,4 +1,4 @@
-# Detektor 0.6.2
+# Detektor 0.7.0
 
 Mapa + GPS + dziennik znalezisk dla poszukiwacza. Aplikacja webowa (PWA), instaluje się na Androidzie z Chrome. Dane zostają w telefonie.
 
@@ -68,6 +68,7 @@ icons/
 - **0.6.0**: miejsce zaczyna się od punktu (przytrzymaj mapę / prawy przycisk → „Dodaj miejsce tutaj”; to samo menu ma „Dodaj znalezisko tutaj”). Granica jednym dotknięciem = ekran. Zapis offline z wyborem zakresu (ekran / granica) i warstw (ortofotomapa, LiDAR); OSM wyłączony z pobierania zgodnie z polityką serwerów OSM.
 - **0.6.1**: odchudzone menu w drzewko (zwijane sekcje): karta miejsca ma na górze nazwę, ołówek (edycja nazwy/statusu/priorytetu) i X, pod spodem podsumowanie znalezisk; granica, notatki, mapy, wyjścia, znaleziska i usuwanie są w swoich zwijanych sekcjach. Zapis offline: „Zakres” i „Co zapisać” rozwijane osobno. To samo w menu głównym (Dane, Ustawienia itd.).
 - **0.6.2**: warstwy mapy w drzewku: podkłady z miniaturami, zwijane Dodatki i Mapy historyczne, sekcja „Widoczność” (znaleziska, trasy, miejsca, granica wybranego miejsca). Granica miejsca rysuje się tylko dla wybranego miejsca, reszta to sama pinezka. Poprawiony błąd „[object HTMLParagraphElement]” w karcie miejsca.
+- **0.7.0**: podkłady zawsze widoczne (bez zwijania). Menu → „Szukaj miejsca” (nazwa miejscowości przez Nominatim albo współrzędne, te działają offline). Menu długiego dotknięcia ma „Nawiguj” i „Kopiuj”. Lista znalezisk z filtrem kategorii.
 - **0.5.0**: zakładka **Miejsca** (przycisk ze szpilką na mapie): granica rysowana punktami, status, priorytet, notatka z kontekstem historycznym, przypisane mapy historyczne i wyjścia (wyjście rozpoczęte w granicy przypisuje się samo). „Zapisz offline” upraszczone: obszar z ekranu albo granica miejsca, przybliżenia do 18, z szacunkiem MB. Miejsca są w kopii zapasowej.
 - **0.4.4**: LiDAR także na ortofotomapie HR; w menu „Narzędzia testowe”: przykładowa wyprawa ([TEST]) i jej usuwanie.
 - **0.4.3**: ortofotomapa HR przez WMTS (EPSG:2180, przeliczany jak LiDAR), usunięta wolna ortofotomapa WMS. HR nie ma wariantu z LiDAR-em. **0.4.2**: naprawa zawieszającej się kolejki kafelków.

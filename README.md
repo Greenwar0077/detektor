@@ -1,15 +1,16 @@
-# Detektor 0.1.5
+# Detektor 0.2.0
 
 Mapa + GPS + dziennik znalezisk dla poszukiwacza. Aplikacja webowa (PWA), instaluje się na Androidzie z Chrome. Dane zostają w telefonie.
 
 ## Co potrafi
 
-- Mapa: OpenStreetMap, ortofotomapa Geoportalu (zwykła i wysokiej rozdzielczości), nakładka NMT (cieniowanie terenu).
-- Twoja pozycja z dokładnością, tryb śledzenia, współrzędne w WGS84 i PL-1992 (do porównania z Geoportalem).
-- Znaleziska: pozycja (GPS / środek mapy / wskazanie palcem), kategoria, znacznik „niebezpieczne”, głębokość, podłoże, sygnał wykrywacza, notatki, do 12 zdjęć.
-- Przytrzymanie palca na mapie dodaje znalezisko w tym miejscu.
-- Nagrywanie śladu (zapis co kilkanaście punktów, odzyskiwanie przerwanego śladu).
-- Eksport: kopia zapasowa JSON ze zdjęciami, GeoJSON (QGIS), GPX.
+- **Wyjścia:** każde wyjście w teren ma własną nazwę, trasę GPS i bibliotekę znalezisk. Start: „Nowe wyjście” (nazwa opcjonalna, nagrywanie trasy można wyłączyć). W trakcie wyjścia na dole są „Znalezisko” i „Pauza” trasy; zakończenie i notatka są na karcie wyjścia (lewy przycisk). Biblioteka wyjść: przycisk „Wyjścia” (gdy nic nie trwa) albo Menu. Z karty wyjścia: pokaż tylko to wyjście na mapie, eksport GPX/GeoJSON, usunięcie.
+- Znaleziska dodane przez przytrzymanie palca na mapie poza wyjściem trafiają do „Szybkich znalezisk” z danego dnia.
+- Przerwane wyjście (zamknięta aplikacja, odświeżona strona) wznawia się samo; wyjście starsze niż 12 godzin zamyka się automatycznie.
+- Mapa: OpenStreetMap, ortofotomapa Geoportalu (zwykła i HR), sam LiDAR, przełącznik LiDAR z suwakiem siły na dowolnym podkładzie, nazwy miejscowości, ulice i numery domów (PRNG, KINA).
+- Twoja pozycja z dokładnością, współrzędne w WGS84 i PL-1992.
+- Znaleziska: pozycja, kategoria, znacznik „niebezpieczne”, głębokość, podłoże, sygnał, notatki, do 12 zdjęć (aparat wbudowany w aplikację, autozapis szkicu).
+- Eksport: kopia zapasowa JSON ze zdjęciami (zawiera wyjścia), GeoJSON (QGIS), GPX.
 - Miejsce na własne mapy historyczne (WIG 1930 itp.) w `config.js`.
 
 ## Uruchomienie: GitHub Pages (ok. 10 minut)
@@ -25,7 +26,7 @@ Wymagany jest https, GitHub Pages go zapewnia. Z `file://` lub zwykłego http GP
 
 ## Aktualizacja
 
-Wgraj zmienione pliki do repozytorium (Add file → Upload files, nadpisz). Przy zmianie plików zmień też `CACHE = 'detektor-v1'` w `sw.js` na `detektor-v2` itd., inaczej telefon może jeszcze przez chwilę pokazywać starą wersję.
+Wgraj zmienione pliki do repozytorium (Add file → Upload files, nadpisz). Przy zmianie plików zmień też numer w `CACHE` w `sw.js` (obecnie `detektor-v8`)., inaczej telefon może jeszcze przez chwilę pokazywać starą wersję.
 
 ## Ważne
 
@@ -47,7 +48,7 @@ Wgraj zmienione pliki do repozytorium (Add file → Upload files, nadpisz). Przy
 ```
 index.html  config.js  sw.js  manifest.webmanifest
 css/app.css
-js/app.js  store.js  geo.js  data.js  exporters.js
+js/app.js  store.js  geo.js  data.js  exporters.js  wmts2180.js
 lib/leaflet/   (Leaflet 1.9.4, licencja BSD-2)
 icons/
 ```

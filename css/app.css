@@ -142,9 +142,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   bottom: 0;
   padding: 10px var(--gutter-r) calc(env(safe-area-inset-bottom, 0px) + 12px) var(--gutter-l);
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   pointer-events: none;
 }
 .bottombar > * { pointer-events: auto; }
@@ -152,7 +152,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .bar-btn {
   min-height: 52px;
   min-width: 0;
-  padding: 0 14px;
+  padding: 0 12px;
   border-radius: 26px;
   border: 1px solid var(--line);
   background: var(--surface);
@@ -186,7 +186,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   font-size: 16px;
 }
 
-body.picking .bottombar, body.picking .side, body.picking .gps-chip { display: none; }
+body.picking .bottombar, body.picking .side, body.picking .gps-chip, body.picking .filterbar { display: none; }
 body.sheet-open .bottombar { visibility: hidden; }
 
 /* Atrybucja i skala nad dolnym paskiem */
@@ -350,3 +350,22 @@ a.btn:visited { color: var(--ink); }
 
 .slider-line { display: block; padding: 4px 0 10px; }
 .slider-line input[type=range] { width: 100%; margin-top: 6px; }
+
+/* ---------- wyjścia ---------- */
+.bar-btn.ghost { visibility: hidden; pointer-events: none; }
+#btn-list.active { border-color: var(--accent); }
+.tag-live { color: var(--danger); font-size: 12px; font-weight: 700; }
+.filterbar {
+  position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--bar-h) + env(safe-area-inset-bottom, 0px) + 34px);
+  max-width: calc(100% - 24px);
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 6px 6px 14px; border-radius: 24px;
+  background: var(--surface); border: 1px solid var(--accent); box-shadow: var(--shadow);
+  font-size: 14px; font-weight: 650;
+}
+.filterbar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filterbar .btn { min-height: 36px; padding: 0 12px; flex: none; }
+
+.bar-btn > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.fab { padding: 0 18px; }

@@ -22,6 +22,7 @@ export function toGeoJSON(pins, tracks) {
       properties: {
         id: p.id,
         kind: 'find',
+        outing: p.outing || null,
         category: catLabel(p.cat),
         time: iso(p.ts),
         depth_cm: p.depth ?? null,
@@ -43,6 +44,7 @@ export function toGeoJSON(pins, tracks) {
       properties: {
         id: t.id,
         kind: 'track',
+        outing: t.outing || null,
         name: t.name,
         start: iso(t.start),
         end: t.end ? iso(t.end) : null,
@@ -99,15 +101,16 @@ export function blobToDataURL(blob) {
   });
 }
 
-export async function makeBackup(pins, tracks, photos) {
+export async function makeBackup(pins, tracks, photos, outings = []) {
   const ph = [];
   for (const p of photos) {
     ph.push({ id: p.id, ts: p.ts, dataUrl: await blobToDataURL(p.blob) });
   }
   return JSON.stringify({
     format: 'detektor-backup',
-    version: 1,
+    version: 2,
     exported: iso(Date.now()),
+    outings,
     pins,
     tracks,
     photos: ph
@@ -148,6 +151,7 @@ export function parseBackup(text) {
       notes: str(p.notes, 5000),
       hazard: !!p.hazard,
       photos: Array.isArray(p.photos) ? p.photos.filter((x) => typeof x === 'string').slice(0, 40) : [],
+      outing: str(p.outing, 80) || null,
       updated: num(p.updated) ?? Date.now()
     });
   }
@@ -165,6 +169,7 @@ export function parseBackup(text) {
       end: num(t.end) ?? pts[pts.length - 1][2],
       dist: num(t.dist) ?? pathLength(pts),
       open: false,
+      outing: str(t.outing, 80) || null,
       pts
     });
   }
@@ -174,5 +179,21 @@ export function parseBackup(text) {
     if (typeof ph.dataUrl !== 'string' || !/^data:image\/(jpeg|png|webp);base64,/.test(ph.dataUrl)) continue;
     photos.push({ id: ph.id.slice(0, 80), ts: num(ph.ts) ?? Date.now(), dataUrl: ph.dataUrl });
   }
-  return { pins, tracks, photos };
+  const outings = [];
+  for (const o of Array.isArray(data.outings) ? data.outings : []) {
+    if (!o || typeof o.id !== 'string') continue;
+    const start = num(o.start) ?? Date.now();
+    outings.push({
+      id: o.id.slice(0, 80),
+      name: str(o.name, 80) || 'Wyjście',
+      start,
+      end: num(o.end) ?? start,
+      open: false,
+      track: !!o.track,
+      quick: !!o.quick,
+      legacy: !!o.legacy,
+      note: str(o.note, 3000)
+    });
+  }
+  return { pins, tracks, photos, outings };
 }

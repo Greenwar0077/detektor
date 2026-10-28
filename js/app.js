@@ -6,7 +6,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.1.5';
+const VERSION = '0.2.0';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -95,7 +95,6 @@ function toLocalInput(ts) {
   const d = new Date(ts);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
-const defaultTrackName = (ts) => `Ślad ${fmtDateTime(ts)}`;
 
 let toastTimer = 0;
 function toast(msg, ms = 2800) {
@@ -132,6 +131,9 @@ function download(name, text, type) {
 const S = {
   pins: new Map(),
   tracks: new Map(),
+  outings: new Map(),
+  outing: null, // aktywne wyjście
+  filter: null, // id wyjścia pokazywanego na mapie (null = wszystko)
   markers: new Map(),
   trackLines: new Map(),
   fix: null,
@@ -161,9 +163,9 @@ for (const [id, label, text] of [['btn-nmt', 'Cieniowanie LiDAR: włącz lub wy�
 $('#btn-menu').append(icon('menu'));
 $('#sheet-close').append(icon('close'));
 $('#viewer-close').append(icon('close'));
-$('#btn-list').append(icon('list', 20), h('span', null, 'Lista'));
-$('#btn-add').append(icon('plus', 24), h('span', null, 'Znalezisko'));
-$('#btn-rec').append(h('span', { class: 'rec-dot' }), h('span', { id: 'rec-label' }, 'Ślad'));
+$('#btn-list').append(icon('list', 20), h('span', { id: 'lbl-list' }, 'Wyjścia'));
+$('#btn-add').append(icon('plus', 24), h('span', { id: 'lbl-add' }, 'Nowe wyjście'));
+$('#btn-rec').append(h('span', { class: 'rec-dot' }), h('span', { id: 'rec-label' }, 'Pauza'));
 
 /* ------------------------------------------------------------------ mapa i warstwy */
 
@@ -330,9 +332,15 @@ function pinIcon(p) {
   });
 }
 
+const inFilter = (o) => !S.filter || o.outing === S.filter;
+
 function renderPin(p) {
   const old = S.markers.get(p.id);
   if (old) pinsGroup.removeLayer(old);
+  if (!inFilter(p)) {
+    S.markers.delete(p.id);
+    return;
+  }
   const m = L.marker([p.lat, p.lng], {
     icon: pinIcon(p),
     title: catLabel(p.cat),
@@ -347,7 +355,8 @@ function renderPin(p) {
 function renderTrack(t) {
   const old = S.trackLines.get(t.id);
   if (old) tracksGroup.removeLayer(old);
-  if (!t.pts || t.pts.length < 2) return;
+  S.trackLines.delete(t.id);
+  if (!t.pts || t.pts.length < 2 || !inFilter(t)) return;
   const line = L.polyline(
     t.pts.map((q) => [q[0], q[1]]),
     { color: '#e8832a', weight: 4, opacity: 0.9, lineJoin: 'round' }
@@ -481,30 +490,56 @@ document.addEventListener('visibilitychange', () => {
   updateChip();
 });
 
-/* ------------------------------------------------------------------ nagrywanie śladu */
+/* ------------------------------------------------------------------ wyjścia i nagrywanie śladu */
 
-function updateRecUI() {
-  const b = $('#btn-rec');
-  const rec = !!S.rec;
-  b.classList.toggle('recording', rec);
-  $('#rec-label').textContent = rec ? `Stop · ${fmtDist(S.rec.t.dist)}` : 'Ślad';
-  b.setAttribute('aria-label', rec ? 'Zatrzymaj nagrywanie śladu' : 'Nagrywaj ślad');
+const outingTracks = (id) => [...S.tracks.values()].filter((t) => t.outing === id);
+const outingPins = (id) => [...S.pins.values()].filter((p) => p.outing === id);
+function outingDist(o) {
+  let d = outingTracks(o.id).reduce((n, t) => n + (t.dist || 0), 0);
+  if (S.rec && S.rec.t.outing === o.id) d += S.rec.t.dist;
+  return d;
+}
+function fmtDuration(ms) {
+  const m = Math.max(0, Math.round(ms / 60000));
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${pad(m % 60)} min`;
 }
 
-function startRec() {
+// Dolny pasek zależy od tego, czy trwa wyjście.
+function updateBar() {
+  const o = S.outing;
+  const rec = $('#btn-rec');
+  $('#lbl-list').textContent = o ? `${outingPins(o.id).length} zn.` : 'Wyjścia';
+  $('#btn-list').setAttribute('aria-label', o ? `Bieżące wyjście: ${outingPins(o.id).length} znalezisk` : 'Biblioteka wyjść');
+  $('#lbl-add').textContent = o ? 'Znalezisko' : 'Nowe wyjście';
+  $('#btn-list').classList.toggle('active', !!o);
+  const showRec = !!(o && S.rec);
+  const paused = !!(S.rec && S.rec.paused);
+  rec.classList.toggle('ghost', !showRec);
+  rec.classList.toggle('recording', showRec && !paused);
+  rec.tabIndex = showRec ? 0 : -1;
+  rec.setAttribute('aria-hidden', String(!showRec));
+  rec.setAttribute('aria-label', paused ? 'Wznów nagrywanie trasy' : 'Wstrzymaj nagrywanie trasy');
+  $('#rec-label').textContent = showRec ? (paused ? 'Wznów' : fmtDist(S.rec.t.dist)) : 'Pauza';
+}
+
+function startRec(o, resume) {
   startGps();
-  const t = { id: store.uid(), name: '', start: Date.now(), end: null, pts: [], dist: 0, open: true };
+  const t = resume || { id: store.uid(), outing: o.id, name: o.name, start: Date.now(), end: null, pts: [], dist: 0, open: true };
   S.rec = {
     t,
-    line: L.polyline([], { color: '#e8832a', weight: 4, opacity: 0.95 }).addTo(map),
-    lastSaved: 0
+    line: L.polyline(
+      t.pts.map((q) => [q[0], q[1]]),
+      { color: '#e8832a', weight: 4, opacity: 0.95 }
+    ).addTo(map),
+    lastSaved: t.pts.length,
+    paused: false,
+    gap: !!resume // po wznowieniu nie doliczamy skoku do pierwszego nowego punktu
   };
   acquireWake();
-  updateRecUI();
-  toast('Nagrywam ślad. Trzymaj ekran włączony: GPS w przeglądarce zwykle nie działa przy wygaszonym.', 5000);
 }
 
 function recordPoint() {
+  if (S.rec.paused) return;
   const f = S.fix;
   const t = S.rec.t;
   if (!f || f.acc > 40) return;
@@ -512,15 +547,25 @@ function recordPoint() {
   if (last) {
     const d = haversine(last[0], last[1], f.lat, f.lng);
     if (d < 3) return;
-    t.dist += d;
+    if (!S.rec.gap) t.dist += d;
   }
+  S.rec.gap = false;
   t.pts.push([f.lat, f.lng, f.ts, Math.round(f.acc)]);
   S.rec.line.addLatLng([f.lat, f.lng]);
-  updateRecUI();
+  updateBar();
   if (t.pts.length - S.rec.lastSaved >= 15) {
     S.rec.lastSaved = t.pts.length;
-    store.put('tracks', { ...t, name: t.name || defaultTrackName(t.start) }).catch(() => {});
+    store.put('tracks', t).catch(() => {});
   }
+}
+
+function togglePause() {
+  if (!S.rec) return;
+  S.rec.paused = !S.rec.paused;
+  if (S.rec.paused) store.put('tracks', S.rec.t).catch(() => {});
+  else S.rec.gap = true;
+  updateBar();
+  toast(S.rec.paused ? 'Trasa wstrzymana. Znaleziska nadal możesz dodawać.' : 'Wznowiono nagrywanie trasy.');
 }
 
 async function stopRec() {
@@ -528,28 +573,119 @@ async function stopRec() {
   S.rec = null;
   map.removeLayer(line);
   releaseWake();
-  updateRecUI();
   t.end = Date.now();
   t.open = false;
-  t.name = t.name || defaultTrackName(t.start);
   if (t.pts.length >= 2) {
     try {
       await store.put('tracks', t);
     } catch (e) {
-      toast('Nie udało się zapisać śladu.', 5000);
+      toast('Nie udało się zapisać trasy.', 5000);
     }
     S.tracks.set(t.id, t);
     renderTrack(t);
-    toast(`Zapisano ślad: ${fmtDist(t.dist)}.`);
   } else {
     store.del('tracks', t.id).catch(() => {});
-    toast('Ślad za krótki, odrzucono.');
   }
 }
 
-function toggleRec() {
-  if (S.rec) stopRec();
-  else startRec();
+function defaultOutingName(ts) {
+  const d = new Date(ts);
+  const base = `Wyjście ${pad(d.getDate())}.${pad(d.getMonth() + 1)}`;
+  const names = new Set([...S.outings.values()].map((o) => o.name));
+  if (!names.has(base)) return base;
+  for (let i = 2; i < 100; i++) if (!names.has(`${base} (${i})`)) return `${base} (${i})`;
+  return base;
+}
+
+async function startOuting(name, track) {
+  const ts = Date.now();
+  const o = { id: store.uid(), name: name.trim() || defaultOutingName(ts), start: ts, end: null, open: true, track, note: '' };
+  try {
+    await store.put('outings', o);
+  } catch (e) {
+    toast('Nie udało się zapisać wyjścia.', 5000);
+    return;
+  }
+  S.outings.set(o.id, o);
+  S.outing = o;
+  LS.set('activeOuting', o.id);
+  LS.set('trackDefault', track);
+  if (S.filter) applyFilter(null);
+  startGps();
+  if (track) startRec(o);
+  updateBar();
+  closeSheet();
+  toast(track ? 'Wyjście rozpoczęte, nagrywam trasę. Trzymaj ekran włączony.' : 'Wyjście rozpoczęte.', 4500);
+}
+
+async function endOuting() {
+  const o = S.outing;
+  if (!o) return;
+  if (S.rec) await stopRec();
+  o.end = Date.now();
+  o.open = false;
+  S.outing = null;
+  LS.set('activeOuting', null);
+  await store.put('outings', o).catch(() => toast('Nie udało się zapisać wyjścia.', 5000));
+  updateBar();
+  const dist = outingDist(o);
+  toast(`Zakończono „${o.name}”: ${outingPins(o.id).length} znalezisk${dist > 0 ? `, ${fmtDist(dist)}` : ''}.`, 5000);
+}
+
+// Znalezisko dodane poza wyjściem trafia do „szybkiego wyjścia” z danego dnia.
+async function quickOuting(ts) {
+  const day = new Date(ts).toDateString();
+  let o = [...S.outings.values()].find((x) => x.quick && new Date(x.start).toDateString() === day);
+  if (!o) {
+    const d = new Date(ts);
+    o = {
+      id: store.uid(),
+      name: `Szybkie znaleziska ${pad(d.getDate())}.${pad(d.getMonth() + 1)}`,
+      start: ts,
+      end: ts,
+      open: false,
+      track: false,
+      quick: true,
+      note: ''
+    };
+    await store.put('outings', o);
+    S.outings.set(o.id, o);
+  }
+  return o.id;
+}
+
+// Dane bez przypisanego wyjścia (starsze wersje, import starej kopii) trafiają do jednego wyjścia zbiorczego.
+async function adoptOrphans() {
+  const pins = [...S.pins.values()].filter((p) => !p.outing);
+  const tracks = [...S.tracks.values()].filter((t) => !t.outing);
+  if (!pins.length && !tracks.length) return;
+  const times = [...pins.map((p) => p.ts), ...tracks.map((t) => t.start)];
+  let o = [...S.outings.values()].find((x) => x.legacy);
+  if (!o) {
+    o = { id: store.uid(), name: 'Wcześniejsze dane', start: Math.min(...times), end: Math.max(...times), open: false, track: false, legacy: true, note: '' };
+  } else {
+    o.start = Math.min(o.start, ...times);
+    o.end = Math.max(o.end || 0, ...times);
+  }
+  await store.put('outings', o);
+  S.outings.set(o.id, o);
+  for (const p of pins) {
+    p.outing = o.id;
+    await store.put('pins', p);
+  }
+  for (const t of tracks) {
+    t.outing = o.id;
+    await store.put('tracks', t);
+  }
+}
+
+function applyFilter(id) {
+  const o = id ? S.outings.get(id) : null;
+  S.filter = o ? o.id : null;
+  $('#filterbar').hidden = !o;
+  if (o) $('#filter-text').textContent = `Tylko: ${o.name}`;
+  for (const p of S.pins.values()) renderPin(p);
+  for (const t of S.tracks.values()) renderTrack(t);
 }
 
 /* ------------------------------------------------------------------ arkusze (dolne panele) */
@@ -752,6 +888,7 @@ async function openForm(pin, preset) {
   cleanupDraft();
   const d = {
     isNew: !pin,
+    outing: pin ? pin.outing || null : null,
     id: pin ? pin.id : store.uid(),
     loc,
     ts: pin ? pin.ts : Date.now(),
@@ -1245,9 +1382,11 @@ async function savePin() {
     notes: d.notes.trim(),
     hazard: d.hazard,
     photos: [...d.keep, ...d.add.map((a) => a.id)],
+    outing: null,
     updated: Date.now()
   };
   try {
+    p.outing = d.outing || (S.outing ? S.outing.id : await quickOuting(d.ts));
     for (const a of d.add) await store.put('photos', { id: a.id, blob: a.blob, ts: Date.now() });
     await store.put('pins', p);
     for (const id of d.removed) await store.del('photos', id);
@@ -1259,7 +1398,9 @@ async function savePin() {
   d.saved = true;
   if (wasNew) LS.set('draft', null);
   S.pins.set(p.id, p);
+  if (S.filter && S.filter !== p.outing) applyFilter(null);
   renderPin(p);
+  updateBar();
   LS.set('lastCat', p.cat);
   store.requestPersist();
   cleanupDraft();
@@ -1276,6 +1417,7 @@ function kvRows(p) {
     { class: 'kv' },
     h('dt', null, 'Data'),
     h('dd', null, fmtDateTime(p.ts)),
+    S.outings.get(p.outing) && [h('dt', null, 'Wyjście'), h('dd', null, S.outings.get(p.outing).name)],
     h('dt', null, 'Pozycja'),
     h('dd', { class: 'mono' }, `${fmtLL(p.lat, p.lng)}${p.acc != null ? ` (±${p.acc} m)` : ''}`),
     h('dt', null, 'Skąd pozycja'),
@@ -1339,6 +1481,7 @@ function openDetail(id) {
             const m = S.markers.get(p.id);
             if (m) pinsGroup.removeLayer(m);
             S.markers.delete(p.id);
+            updateBar();
             toast('Usunięto znalezisko.');
             closeSheet();
           }
@@ -1379,46 +1522,282 @@ function openDetail(id) {
 
 /* ------------------------------------------------------------------ lista znalezisk */
 
+function pinListNode(pins, emptyText) {
+  if (!pins.length) return h('p', { class: 'hint' }, emptyText);
+  return h(
+    'div',
+    { class: 'list' },
+    pins.map((p) => {
+      const ph = h('span', { class: 'ph' }, icon('pin', 22));
+      if (p.photos && p.photos[0]) {
+        store.get('photos', p.photos[0]).then((rec) => {
+          if (rec && ph.isConnected) ph.replaceChildren(h('img', { src: trackUrl(rec.blob), alt: '' }));
+        });
+      }
+      const dist = S.fix ? fmtDist(haversine(S.fix.lat, S.fix.lng, p.lat, p.lng)) : '';
+      return h(
+        'button',
+        {
+          type: 'button',
+          class: 'item',
+          onClick: () => {
+            map.setView([p.lat, p.lng], Math.max(map.getZoom(), 17));
+            openDetail(p.id);
+          }
+        },
+        ph,
+        h(
+          'span',
+          null,
+          h('div', { class: 't' }, catLabel(p.cat), p.hazard && h('span', { class: 'tag-haz' }, '  ! niebezpieczne')),
+          h('div', { class: 's' }, [fmtDateTime(p.ts), p.depth != null ? `${p.depth} cm` : ''].filter(Boolean).join(' · '))
+        ),
+        h('span', { class: 'd' }, dist)
+      );
+    })
+  );
+}
+
 function openList() {
   const pins = [...S.pins.values()].sort((a, b) => b.ts - a.ts);
-  let body;
-  if (!pins.length) {
-    body = h('p', { class: 'hint' }, 'Brak znalezisk. Dotknij „Znalezisko”, żeby dodać pierwsze. Możesz też przytrzymać palec na mapie.');
-  } else {
-    body = h(
-      'div',
-      { class: 'list' },
-      pins.map((p) => {
-        const ph = h('span', { class: 'ph' }, icon('pin', 22));
-        if (p.photos && p.photos[0]) {
-          store.get('photos', p.photos[0]).then((rec) => {
-            if (rec && ph.isConnected) ph.replaceChildren(h('img', { src: trackUrl(rec.blob), alt: '' }));
-          });
-        }
-        const dist = S.fix ? fmtDist(haversine(S.fix.lat, S.fix.lng, p.lat, p.lng)) : '';
-        return h(
-          'button',
-          {
-            type: 'button',
-            class: 'item',
-            onClick: () => {
-              map.setView([p.lat, p.lng], Math.max(map.getZoom(), 17));
-              openDetail(p.id);
-            }
-          },
-          ph,
-          h(
-            'span',
-            null,
-            h('div', { class: 't' }, catLabel(p.cat), p.hazard && h('span', { class: 'tag-haz' }, '  ! niebezpieczne')),
-            h('div', { class: 's' }, [fmtDateTime(p.ts), p.depth != null ? `${p.depth} cm` : ''].filter(Boolean).join(' · '))
-          ),
-          h('span', { class: 'd' }, dist)
-        );
-      })
-    );
+  openSheet(`Wszystkie znaleziska (${pins.length})`, [
+    h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn', onClick: () => openOutings() }, '← Wyjścia')),
+    pinListNode(pins, 'Brak znalezisk.')
+  ]);
+}
+
+/* ------------------------------------------------------------------ wyjścia: biblioteka i szczegóły */
+
+function openNewOuting() {
+  const def = defaultOutingName(Date.now());
+  let track = LS.get('trackDefault', true);
+  const input = h('input', { type: 'text', maxlength: '80', placeholder: def, autocomplete: 'off', 'aria-label': 'Nazwa wyjścia' });
+  const sw = h(
+    'button',
+    {
+      type: 'button',
+      class: 'opt',
+      'aria-pressed': String(track),
+      onClick: () => {
+        track = !track;
+        sw.setAttribute('aria-pressed', String(track));
+        sw.textContent = track ? 'Tak' : 'Nie';
+      }
+    },
+    track ? 'Tak' : 'Nie'
+  );
+  openSheet('Nowe wyjście', [
+    h('div', { class: 'field' }, h('label', null, 'Nazwa (opcjonalnie)'), input),
+    h('div', { class: 'switch' }, h('span', null, 'Nagrywaj trasę (GPS)', h('small', { class: 'hint' }, 'Wyłącz, żeby oszczędzać baterię.')), sw),
+    h('p', { class: 'hint' }, 'Znaleziska dodane w trakcie wyjścia trafią do jego osobnej biblioteki.'),
+    h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn primary', onClick: () => startOuting(input.value, track) }, 'Zacznij wyjście'))
+  ]);
+}
+
+function outingCard(o) {
+  const n = outingPins(o.id).length;
+  const dist = outingDist(o);
+  const dur = !o.open && o.end && o.end - o.start > 60000 ? fmtDuration(o.end - o.start) : '';
+  const meta = [fmtDateTime(o.start), dur, dist > 0 ? fmtDist(dist) : '', `${n} zn.`].filter(Boolean).join(' · ');
+  return h(
+    'button',
+    { type: 'button', class: 'item', onClick: () => openOutingDetail(o.id) },
+    h('span', { class: 'ph' }, icon('nav', 22)),
+    h('span', null, h('div', { class: 't' }, o.name, o.open && h('span', { class: 'tag-live' }, '  ● trwa')), h('div', { class: 's' }, meta))
+  );
+}
+
+function openOutings(keepScroll = false) {
+  const list = [...S.outings.values()].sort((a, b) => b.start - a.start);
+  openSheet(
+    `Wyjścia (${list.length})`,
+    [
+      S.filter &&
+        h(
+          'div',
+          { class: 'banner' },
+          h('span', null, 'Mapa pokazuje tylko jedno wyjście.'),
+          h('button', { type: 'button', class: 'btn', onClick: () => { applyFilter(null); openOutings(true); } }, 'Pokaż wszystko')
+        ),
+      h(
+        'div',
+        { class: 'row-actions' },
+        !S.outing && h('button', { type: 'button', class: 'btn primary', onClick: openNewOuting }, icon('plus', 18), 'Nowe wyjście'),
+        h('button', { type: 'button', class: 'btn', onClick: openList }, icon('list', 18), `Wszystkie znaleziska (${S.pins.size})`)
+      ),
+      list.length
+        ? h('div', { class: 'list' }, list.map(outingCard))
+        : h('p', { class: 'hint' }, 'Brak wyjść. Każde wyjście ma własną trasę i bibliotekę znalezisk. Dotknij „Nowe wyjście”, żeby zacząć.')
+    ],
+    keepScroll
+  );
+}
+
+function slug(s) {
+  return (
+    String(s)
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/ł/g, 'l')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40) || 'wyjscie'
+  );
+}
+
+async function deleteOuting(o) {
+  if (S.outing === o) {
+    if (S.rec) {
+      map.removeLayer(S.rec.line);
+      store.del('tracks', S.rec.t.id).catch(() => {});
+      S.rec = null;
+      releaseWake();
+    }
+    S.outing = null;
+    LS.set('activeOuting', null);
   }
-  openSheet(`Znaleziska (${pins.length})`, body);
+  try {
+    for (const p of outingPins(o.id)) {
+      for (const pid of p.photos || []) await store.del('photos', pid);
+      await store.del('pins', p.id);
+      S.pins.delete(p.id);
+      const m = S.markers.get(p.id);
+      if (m) pinsGroup.removeLayer(m);
+      S.markers.delete(p.id);
+    }
+    for (const t of outingTracks(o.id)) {
+      await store.del('tracks', t.id);
+      S.tracks.delete(t.id);
+      const line = S.trackLines.get(t.id);
+      if (line) tracksGroup.removeLayer(line);
+      S.trackLines.delete(t.id);
+    }
+    await store.del('outings', o.id);
+  } catch (e) {
+    toast('Nie udało się usunąć wszystkiego.', 5000);
+  }
+  S.outings.delete(o.id);
+  if (S.filter === o.id) applyFilter(null);
+  updateBar();
+  toast('Usunięto wyjście.');
+  openOutings();
+}
+
+function showOnMap(o) {
+  const pts = [...outingPins(o.id).map((p) => [p.lat, p.lng]), ...outingTracks(o.id).flatMap((t) => t.pts.map((q) => [q[0], q[1]]))];
+  if (S.rec && S.rec.t.outing === o.id) pts.push(...S.rec.t.pts.map((q) => [q[0], q[1]]));
+  if (!pts.length) {
+    toast('To wyjście nie ma jeszcze żadnych danych na mapie.');
+    return;
+  }
+  if (!S.settings.showTracks) {
+    S.settings.showTracks = true;
+    LS.set('showTracks', true);
+    tracksGroup.addTo(map);
+  }
+  applyFilter(o.id);
+  closeSheet();
+  map.fitBounds(L.latLngBounds(pts).pad(0.2), { maxZoom: 18 });
+}
+
+function openOutingDetail(id, keepScroll = false) {
+  const o = S.outings.get(id);
+  if (!o) {
+    openOutings();
+    return;
+  }
+  const pins = outingPins(id).sort((a, b) => b.ts - a.ts);
+  const tracks = outingTracks(id);
+  const dist = outingDist(o);
+  const active = S.outing === o;
+  const save = () => store.put('outings', o).catch(() => toast('Nie udało się zapisać.', 4000));
+
+  const nameIn = h('input', {
+    type: 'text',
+    maxlength: '80',
+    value: o.name,
+    'aria-label': 'Nazwa wyjścia',
+    onChange: (e) => {
+      o.name = e.target.value.trim() || o.name;
+      e.target.value = o.name;
+      for (const t of tracks) {
+        t.name = o.name;
+        store.put('tracks', t).catch(() => {});
+      }
+      if (S.rec && S.rec.t.outing === o.id) S.rec.t.name = o.name;
+      if (S.filter === o.id) $('#filter-text').textContent = `Tylko: ${o.name}`;
+      save();
+    }
+  });
+  const noteIn = h('textarea', {
+    maxlength: '3000',
+    placeholder: 'Notatka (np. teren, pogoda, ustawienia wykrywacza)',
+    'aria-label': 'Notatka do wyjścia',
+    props: { value: o.note || '' },
+    onChange: (e) => {
+      o.note = e.target.value.trim();
+      save();
+    }
+  });
+
+  const endWrap = h('div', { class: 'row-actions' });
+  const showEnd = () =>
+    endWrap.replaceChildren(
+      S.rec && h('button', { type: 'button', class: 'btn', onClick: () => { togglePause(); openOutingDetail(id, true); } }, S.rec.paused ? 'Wznów trasę' : 'Wstrzymaj trasę'),
+      h('button', { type: 'button', class: 'btn primary', onClick: askEnd }, 'Zakończ wyjście')
+    );
+  const askEnd = () =>
+    endWrap.replaceChildren(
+      h('p', { class: 'hint' }, 'Zakończyć wyjście? Trasa przestanie się nagrywać.'),
+      h('button', { type: 'button', class: 'btn', onClick: showEnd }, 'Anuluj'),
+      h('button', { type: 'button', class: 'btn primary', onClick: async () => { await endOuting(); openOutingDetail(id); } }, 'Tak, zakończ')
+    );
+  if (active) showEnd();
+
+  const delWrap = h('div', { class: 'row-actions' });
+  const showDel = () => delWrap.replaceChildren(h('button', { type: 'button', class: 'btn danger', onClick: askDel }, icon('trash', 18), 'Usuń wyjście'));
+  const askDel = () =>
+    delWrap.replaceChildren(
+      h('p', { class: 'hint' }, `Usunąć „${o.name}” razem z trasą, ${pins.length} znaleziskami i ich zdjęciami? Nie da się tego cofnąć.`),
+      h('button', { type: 'button', class: 'btn', onClick: showDel }, 'Anuluj'),
+      h('button', { type: 'button', class: 'btn danger', onClick: () => deleteOuting(o) }, 'Tak, usuń')
+    );
+  showDel();
+
+  openSheet(
+    o.name,
+    [
+      h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn', onClick: () => openOutings() }, '← Wyjścia')),
+      active && h('div', { class: 'banner' }, h('span', null, '● Wyjście trwa. Znaleziska dodajesz przyciskiem na dole mapy.')),
+      active && endWrap,
+      h('div', { class: 'field' }, h('label', null, 'Nazwa'), nameIn),
+      h(
+        'dl',
+        { class: 'kv' },
+        h('dt', null, 'Start'),
+        h('dd', null, fmtDateTime(o.start)),
+        h('dt', null, 'Koniec'),
+        h('dd', null, o.open ? 'trwa' : fmtDateTime(o.end || o.start)),
+        !o.open && o.end && o.end - o.start > 60000 && [h('dt', null, 'Czas'), h('dd', null, fmtDuration(o.end - o.start))],
+        h('dt', null, 'Trasa'),
+        h('dd', null, dist > 0 ? fmtDist(dist) : o.track ? 'brak punktów' : 'nie nagrywana'),
+        h('dt', null, 'Znaleziska'),
+        h('dd', null, String(pins.length))
+      ),
+      h('div', { class: 'field' }, h('label', null, 'Notatka'), noteIn),
+      h(
+        'div',
+        { class: 'row-actions' },
+        h('button', { type: 'button', class: 'btn primary', onClick: () => showOnMap(o) }, icon('layers', 18), 'Pokaż na mapie'),
+        h('button', { type: 'button', class: 'btn', onClick: () => exportGPX(id) }, icon('download', 18), 'GPX'),
+        h('button', { type: 'button', class: 'btn', onClick: () => exportGeoJSON(id) }, icon('download', 18), 'GeoJSON')
+      ),
+      h('div', { class: 'section' }, h('h3', null, `Znaleziska (${pins.length})`), pinListNode(pins, 'Brak znalezisk w tym wyjściu.')),
+      delWrap
+    ],
+    keepScroll
+  );
 }
 
 /* ------------------------------------------------------------------ warstwy */
@@ -1582,20 +1961,27 @@ function openLayers(keepScroll = false) {
 
 /* ------------------------------------------------------------------ menu: dane, ślady, ustawienia */
 
-async function exportGeoJSON() {
-  const text = JSON.stringify(toGeoJSON([...S.pins.values()], [...S.tracks.values()]), null, 1);
-  download(`detektor-${stamp()}.geojson`, text, 'application/geo+json');
+function exportData(outingId) {
+  const o = outingId ? S.outings.get(outingId) : null;
+  return {
+    pins: o ? outingPins(o.id) : [...S.pins.values()],
+    tracks: o ? outingTracks(o.id) : [...S.tracks.values()],
+    tag: o ? slug(o.name) : 'wszystko'
+  };
 }
-function exportGPX(onlyTrack) {
-  const pins = onlyTrack ? [] : [...S.pins.values()];
-  const tracks = onlyTrack ? [onlyTrack] : [...S.tracks.values()];
-  download(`detektor-${stamp()}.gpx`, toGPX(pins, tracks), 'application/gpx+xml');
+async function exportGeoJSON(outingId) {
+  const d = exportData(outingId);
+  download(`detektor-${d.tag}-${stamp()}.geojson`, JSON.stringify(toGeoJSON(d.pins, d.tracks), null, 1), 'application/geo+json');
+}
+function exportGPX(outingId) {
+  const d = exportData(outingId);
+  download(`detektor-${d.tag}-${stamp()}.gpx`, toGPX(d.pins, d.tracks), 'application/gpx+xml');
 }
 async function exportBackup() {
   try {
     const used = new Set([...S.pins.values()].flatMap((p) => p.photos || []));
     const photos = (await store.getAll('photos')).filter((ph) => used.has(ph.id));
-    const text = await makeBackup([...S.pins.values()], [...S.tracks.values()], photos);
+    const text = await makeBackup([...S.pins.values()], [...S.tracks.values()], photos, [...S.outings.values()]);
     download(`detektor-kopia-${stamp()}.json`, text, 'application/json');
     LS.set('lastBackup', Date.now());
     toast('Kopia zapasowa zapisana w Pobranych.');
@@ -1610,17 +1996,23 @@ async function applyImport(data) {
     const blob = await (await fetch(ph.dataUrl)).blob();
     await store.put('photos', { id: ph.id, blob, ts: ph.ts });
   }
+  for (const o of data.outings) {
+    if (S.outing && o.id === S.outing.id) continue;
+    await store.put('outings', o);
+    S.outings.set(o.id, o);
+  }
   for (const p of data.pins) {
     await store.put('pins', p);
     S.pins.set(p.id, p);
-    renderPin(p);
   }
   for (const t of data.tracks) {
     await store.put('tracks', t);
     S.tracks.set(t.id, t);
-    renderTrack(t);
   }
-  toast(`Zaimportowano: ${data.pins.length} znalezisk, ${data.tracks.length} śladów.`, 4000);
+  await adoptOrphans();
+  applyFilter(S.filter);
+  updateBar();
+  toast(`Zaimportowano: ${data.outings.length} wyjść, ${data.pins.length} znalezisk, ${data.tracks.length} tras.`, 4000);
 }
 
 async function handleImport(file, box) {
@@ -1635,7 +2027,7 @@ async function handleImport(file, box) {
     h(
       'p',
       { class: 'hint' },
-      `Plik zawiera: ${data.pins.length} znalezisk, ${data.photos.length} zdjęć, ${data.tracks.length} śladów. Dane zostaną scalone z obecnymi (ten sam identyfikator oznacza nadpisanie).`
+      `Plik zawiera: ${data.outings.length} wyjść, ${data.pins.length} znalezisk, ${data.photos.length} zdjęć, ${data.tracks.length} tras. Dane zostaną scalone z obecnymi (ten sam identyfikator oznacza nadpisanie).`
     ),
     h(
       'div',
@@ -1659,65 +2051,6 @@ async function handleImport(file, box) {
       )
     )
   );
-}
-
-function trackRow(t) {
-  const wrap = h('div', { class: 'layer-row' });
-  const actions = () =>
-    wrap.replaceChildren(
-      h('div', { class: 'top' }, h('strong', null, t.name), h('span', { class: 'hint' }, fmtDist(t.dist))),
-      h(
-        'div',
-        { class: 'row-actions' },
-        h(
-          'button',
-          {
-            type: 'button',
-            class: 'btn',
-            onClick: () => {
-              if (!S.settings.showTracks) {
-                S.settings.showTracks = true;
-                LS.set('showTracks', true);
-                tracksGroup.addTo(map);
-              }
-              const line = S.trackLines.get(t.id);
-              if (line) map.fitBounds(line.getBounds(), { padding: [40, 40] });
-              closeSheet();
-            }
-          },
-          'Pokaż'
-        ),
-        h('button', { type: 'button', class: 'btn', onClick: () => exportGPX(t) }, 'GPX'),
-        h('button', { type: 'button', class: 'btn danger', onClick: confirmDel }, 'Usuń')
-      )
-    );
-  const confirmDel = () =>
-    wrap.replaceChildren(
-      h('p', { class: 'hint' }, `Usunąć ślad „${t.name}”?`),
-      h(
-        'div',
-        { class: 'row-actions' },
-        h('button', { type: 'button', class: 'btn', onClick: actions }, 'Anuluj'),
-        h(
-          'button',
-          {
-            type: 'button',
-            class: 'btn danger',
-            onClick: async () => {
-              await store.del('tracks', t.id).catch(() => {});
-              S.tracks.delete(t.id);
-              const line = S.trackLines.get(t.id);
-              if (line) tracksGroup.removeLayer(line);
-              S.trackLines.delete(t.id);
-              openMenu(true);
-            }
-          },
-          'Tak, usuń'
-        )
-      )
-    );
-  actions();
-  return wrap;
 }
 
 function switchRow(label, key, onChange) {
@@ -1756,7 +2089,6 @@ async function openMenu(keepScroll = false) {
       if (f) handleImport(f, importBox);
     }
   });
-  const tracks = [...S.tracks.values()].sort((a, b) => b.start - a.start);
   const diag = ALL_DEFS.filter((d) => layerObjs.has(d.id)).map((d) => {
     const x = S.diag[d.id] || { ok: 0, err: 0 };
     return h('div', { class: 'hint' }, `${d.name}: ${x.ok} kafelków OK, ${x.err} błędów`);
@@ -1772,7 +2104,7 @@ async function openMenu(keepScroll = false) {
         h(
           'p',
           { class: 'hint' },
-          `${S.pins.size} znalezisk · ${photoCount} zdjęć · ${S.tracks.size} śladów`,
+          `${S.outings.size} wyjść · ${S.pins.size} znalezisk · ${photoCount} zdjęć`,
           info.usage != null ? ` · zajęte ${mb(info.usage)} MB` : '',
           info.persisted != null ? ` · trwałe przechowywanie: ${info.persisted ? 'tak' : 'nie'}` : ''
         ),
@@ -1797,22 +2129,22 @@ async function openMenu(keepScroll = false) {
         h(
           'div',
           { class: 'row-actions' },
-          h('button', { type: 'button', class: 'btn', onClick: exportGeoJSON }, icon('download', 18), 'GeoJSON (QGIS)'),
+          h('button', { type: 'button', class: 'btn', onClick: () => exportGeoJSON() }, icon('download', 18), 'GeoJSON (QGIS)'),
           h('button', { type: 'button', class: 'btn', onClick: () => exportGPX() }, icon('download', 18), 'GPX')
         ),
-        h('p', { class: 'hint' }, 'GeoJSON i GPX zawierają znaleziska i ślady, bez zdjęć.')
+        h('p', { class: 'hint' }, 'To eksport wszystkich wyjść naraz (bez zdjęć). Pojedyncze wyjście wyeksportujesz z jego karty.')
       ),
       h(
         'div',
         { class: 'section' },
-        h('h3', null, `Ślady (${tracks.length})`),
-        tracks.length ? tracks.map(trackRow) : h('p', { class: 'hint' }, 'Brak zapisanych śladów. Użyj przycisku „Ślad” na dole ekranu.')
+        h('h3', null, `Wyjścia (${S.outings.size})`),
+        h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn', onClick: () => openOutings() }, 'Otwórz bibliotekę wyjść'))
       ),
       h(
         'div',
         { class: 'section' },
         h('h3', null, 'Ustawienia'),
-        switchRow('Pokazuj zapisane ślady na mapie', 'showTracks', (on) => {
+        switchRow('Pokazuj zapisane trasy na mapie', 'showTracks', (on) => {
           if (on) tracksGroup.addTo(map);
           else map.removeLayer(tracksGroup);
         }),
@@ -1839,38 +2171,73 @@ async function openMenu(keepScroll = false) {
 
 /* ------------------------------------------------------------------ podpięcie przycisków i start */
 
-$('#btn-list').addEventListener('click', openList);
-$('#btn-add').addEventListener('click', () => openForm(null));
-$('#btn-rec').addEventListener('click', toggleRec);
+$('#btn-list').addEventListener('click', () => (S.outing ? openOutingDetail(S.outing.id) : openOutings()));
+$('#btn-add').addEventListener('click', () => (S.outing ? openForm(null) : openNewOuting()));
+$('#btn-rec').addEventListener('click', togglePause);
+$('#filter-clear').addEventListener('click', () => applyFilter(null));
 $('#btn-layers').addEventListener('click', () => openLayers());
 $('#btn-nmt').addEventListener('click', toggleNmt);
 $('#btn-menu').addEventListener('click', () => openMenu());
 $('#btn-locate').addEventListener('click', onLocate);
 $('#gps-chip').addEventListener('click', onChip);
 
+const outingPinsOf = (pins, id) => (pins || []).filter((p) => p.outing === id);
+
 async function boot() {
   applyLayers();
   updateChip();
-  updateRecUI();
+  updateBar();
   updateLocateBtn();
   try {
-    const [pins, tracks] = await Promise.all([store.getAll('pins'), store.getAll('tracks')]);
-    for (const p of pins || []) {
-      S.pins.set(p.id, p);
-      renderPin(p);
+    const [pins, tracks, outings] = await Promise.all([store.getAll('pins'), store.getAll('tracks'), store.getAll('outings')]);
+    for (const o of outings || []) S.outings.set(o.id, o);
+    for (const p of pins || []) S.pins.set(p.id, p);
+
+    // Wyjście przerwane (zamknięta aplikacja) wznawiamy; zbyt stare zamykamy samodzielnie.
+    const wanted = LS.get('activeOuting', null);
+    const openOs = [...S.outings.values()].filter((o) => o.open).sort((a, b) => b.start - a.start);
+    const act = openOs.find((o) => o.id === wanted) || openOs[0] || null;
+    const lastActivity = (o) => {
+      const ts = [o.start, ...outingPinsOf(pins, o.id).map((p) => p.ts)];
+      for (const t of tracks || []) if (t.outing === o.id) ts.push(t.pts.length ? t.pts[t.pts.length - 1][2] : t.start);
+      return Math.max(...ts);
+    };
+    let resume = null;
+    for (const o of openOs) {
+      const last = lastActivity(o);
+      if (o === act && Date.now() - last < 12 * 3600e3) continue;
+      o.open = false;
+      o.end = last;
+      store.put('outings', o).catch(() => {});
+      if (o === act) toast('Poprzednie wyjście zakończono automatycznie.', 5000);
     }
+    S.outing = act && act.open ? act : null;
+
     for (const t of tracks || []) {
+      if (S.outing && t.outing === S.outing.id && t.open) {
+        resume = t;
+        continue;
+      }
       if (t.open) {
-        // Ślad przerwany (np. zamknięcie aplikacji w trakcie nagrywania): odzyskujemy to, co zapisano.
+        // Trasa przerwana: odzyskujemy to, co zapisano.
         t.open = false;
         if (!t.end) t.end = t.pts.length ? t.pts[t.pts.length - 1][2] : t.start;
         if (t.pts.length >= 2) store.put('tracks', t).catch(() => {});
       }
-      if (t.pts && t.pts.length >= 2) {
-        S.tracks.set(t.id, t);
-        renderTrack(t);
-      }
+      if (t.pts && t.pts.length >= 2) S.tracks.set(t.id, t);
     }
+    await adoptOrphans();
+    for (const p of S.pins.values()) renderPin(p);
+    for (const t of S.tracks.values()) renderTrack(t);
+    if (S.outing) {
+      LS.set('activeOuting', S.outing.id);
+      startGps();
+      if (S.outing.track) startRec(S.outing, resume || undefined);
+      toast(`Trwa wyjście „${S.outing.name}”.`, 4000);
+    } else {
+      LS.set('activeOuting', null);
+    }
+    updateBar();
     // porządki: zdjęcia nieprzypisane do znaleziska ani do szkicu
     const sv = LS.get('draft', null);
     const keep = new Set([...S.pins.values()].flatMap((p) => p.photos || []));

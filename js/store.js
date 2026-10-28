@@ -2,8 +2,8 @@
 // aplikacja działa w pamięci tymczasowej i ostrzega użytkownika.
 
 const DB_NAME = 'detektor';
-const DB_VERSION = 1;
-const STORES = ['pins', 'photos', 'tracks'];
+const DB_VERSION = 2;
+const STORES = ['pins', 'photos', 'tracks', 'outings'];
 
 let dbPromise = null;
 let memory = null; // awaryjny magazyn w pamięci
@@ -46,7 +46,7 @@ function openDb() {
 
 function useMemory() {
   if (!memory) {
-    memory = { pins: new Map(), photos: new Map(), tracks: new Map() };
+    memory = { pins: new Map(), photos: new Map(), tracks: new Map(), outings: new Map() };
   }
 }
 

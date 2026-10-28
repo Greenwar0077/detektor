@@ -1,4 +1,4 @@
-# Detektor 0.3.1
+# Detektor 0.4.0
 
 Mapa + GPS + dziennik znalezisk dla poszukiwacza. Aplikacja webowa (PWA), instaluje się na Androidzie z Chrome. Dane zostają w telefonie.
 
@@ -61,3 +61,12 @@ icons/
 ```
 
 Źródła map: © OpenStreetMap contributors, © GUGiK (geoportal.gov.pl). OSM ma politykę użycia kafelków: do własnego użytku w porządku, nie do masowego pobierania.
+
+
+## Nowości w 0.4.0
+
+- **Szybsza i pewniejsza mapa**: kafelki Geoportalu idą przez kolejkę (4 naraz) z ponawianiem po błędzie, a obejrzane kafelki zapisują się w telefonie (do ok. 4000), więc kolejne wejście na ten sam teren ładuje się od razu. Jakość ortofotomapy bez zmian.
+- **Mapa offline** (Menu → Pobierz widoczny obszar): zapisuje kafelki aktualnych warstw dla wybranych przybliżeń. Wymaga zainstalowanej aplikacji (po drugim otwarciu). Jeśli serwer nie zezwala na zapis (CORS), aplikacja o tym poinformuje.
+- **Przeszukany teren** (Menu → Ustawienia): zielony pas wzdłuż tras o szerokości cewki 1/2/3 m.
+- **Pozycjonowanie skanu**: minimum 2 punkty.
+- **Przypomnienie o kopii zapasowej** po 7 dniach (raz na dobę).

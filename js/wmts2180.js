@@ -3,6 +3,7 @@
 // z kafelków źródłowych, przeliczając współrzędne. Obrazy tylko rysujemy (bez odczytu pikseli),
 // dlatego nie jest potrzebna zgoda CORS serwera.
 import { toPuwg1992 } from './geo.js';
+import { loadImageRetry } from './tilequeue.js';
 
 const L = window.L;
 const PIXEL_M = 0.00028; // rozmiar piksela w definicji skali WMTS
@@ -98,15 +99,7 @@ function compose(tile, mix) {
   }
 }
 
-function loadImage(url) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.decoding = 'async';
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = url;
-  });
-}
+const loadImage = (url) => loadImageRetry(url);
 
 // Adres obrazu tła (ortofoto WMS albo kafelki XYZ) dla kafelka mapy.
 function underUrl(under, z, tx, ty, px) {
@@ -125,6 +118,47 @@ function underUrl(under, z, tx, ty, px) {
   );
 }
 
+// Które kafelki źródłowe (PL-1992) potrzebne są do narysowania kafelka mapy.
+function plan(z, tx, ty) {
+  const center = L.CRS.EPSG3857.pointToLatLng(L.point(tx * 256 + 128, ty * 256 + 128), z);
+  const li = pickLevel(z, center.lat);
+  const lv = LEVELS[li];
+  const n = z >= 14 ? 1 : 4; // przy małych zoomach dzielimy kafelek na siatkę n×n
+  const step = 256 / n;
+  const dp = [];
+  const gp = [];
+  for (let j = 0; j <= n; j++) {
+    dp.push([]);
+    gp.push([]);
+    for (let i = 0; i <= n; i++) {
+      dp[j].push({ x: i * step, y: j * step });
+      gp[j].push(toGlobal(z, tx, ty, i * step, j * step, lv.pix));
+    }
+  }
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const row of gp) {
+    for (const p of row) {
+      minX = Math.min(minX, p.gx);
+      maxX = Math.max(maxX, p.gx);
+      minY = Math.min(minY, p.gy);
+      maxY = Math.max(maxY, p.gy);
+    }
+  }
+  const c0 = Math.max(lv.c0, Math.floor(minX / SRC));
+  const c1 = Math.min(lv.c1, Math.floor(maxX / SRC));
+  const r0 = Math.max(lv.r0, Math.floor(minY / SRC));
+  const r1 = Math.min(lv.r1, Math.floor(maxY / SRC));
+  return { li, lv, n, dp, gp, c0, c1, r0, r1 };
+}
+
+const srcUrl = (def, li, row, col) =>
+  `${def.url}?service=WMTS&request=GetTile&version=1.0.0&layer=${encodeURIComponent(def.layer)}` +
+  `&style=default&format=${encodeURIComponent(def.format || 'image/jpeg')}` +
+  `&TileMatrixSet=EPSG:2180&TileMatrix=EPSG:2180:${li}&TileRow=${row}&TileCol=${col}`;
+
 export function createWmts2180Layer(def, options) {
   const Layer = L.GridLayer.extend({
     createTile(coords, done) {
@@ -141,51 +175,14 @@ export function createWmts2180Layer(def, options) {
 
     async _draw(tile, coords, r) {
       const { x: tx, y: ty, z } = coords;
-      const center = L.CRS.EPSG3857.pointToLatLng(L.point(tx * 256 + 128, ty * 256 + 128), z);
-      const li = pickLevel(z, center.lat);
-      const lv = LEVELS[li];
-      const n = z >= 14 ? 1 : 4; // przy małych zoomach dzielimy kafelek na siatkę n×n
-      const step = 256 / n;
-
-      // punkty siatki
-      const dp = [];
-      const gp = [];
-      for (let j = 0; j <= n; j++) {
-        dp.push([]);
-        gp.push([]);
-        for (let i = 0; i <= n; i++) {
-          dp[j].push({ x: i * step, y: j * step });
-          gp[j].push(toGlobal(z, tx, ty, i * step, j * step, lv.pix));
-        }
-      }
-
-      // jakie kafelki źródłowe są potrzebne
-      let minX = Infinity;
-      let maxX = -Infinity;
-      let minY = Infinity;
-      let maxY = -Infinity;
-      for (const row of gp) {
-        for (const p of row) {
-          minX = Math.min(minX, p.gx);
-          maxX = Math.max(maxX, p.gx);
-          minY = Math.min(minY, p.gy);
-          maxY = Math.max(maxY, p.gy);
-        }
-      }
-      const c0 = Math.max(lv.c0, Math.floor(minX / SRC));
-      const c1 = Math.min(lv.c1, Math.floor(maxX / SRC));
-      const r0 = Math.max(lv.r0, Math.floor(minY / SRC));
-      const r1 = Math.min(lv.r1, Math.floor(maxY / SRC));
+      const { li, n, dp, gp, c0, c1, r0, r1 } = plan(z, tx, ty);
       if (c1 < c0 || r1 < r0) return true; // poza zasięgiem usługi: pusty kafelek, nie błąd
       if ((c1 - c0 + 1) * (r1 - r0 + 1) > 16) return false;
 
       const jobs = [];
       for (let row = r0; row <= r1; row++) {
         for (let col = c0; col <= c1; col++) {
-          const url =
-            `${def.url}?service=WMTS&request=GetTile&version=1.0.0&layer=${encodeURIComponent(def.layer)}` +
-            `&style=default&format=${encodeURIComponent(def.format || 'image/jpeg')}` +
-            `&TileMatrixSet=EPSG:2180&TileMatrix=EPSG:2180:${li}&TileRow=${row}&TileCol=${col}`;
+          const url = srcUrl(def, li, row, col);
           jobs.push(loadImage(url).then((img) => ({ img, col, row })));
         }
       }
@@ -247,6 +244,20 @@ export function createWmts2180Layer(def, options) {
         compose(tile, this.options.shadeAlpha ?? 0.5);
       }
       return true;
+    },
+
+    // adresy wszystkich plików potrzebnych do narysowania kafelka (do zapisu offline)
+    urlsFor(coords) {
+      const out = [];
+      const { li, c0, c1, r0, r1 } = plan(coords.z, coords.x, coords.y);
+      if (c1 >= c0 && r1 >= r0 && (c1 - c0 + 1) * (r1 - r0 + 1) <= 16) {
+        for (let row = r0; row <= r1; row++) for (let col = c0; col <= c1; col++) out.push(srcUrl(def, li, row, col));
+      }
+      if (def.under) {
+        const r = (window.devicePixelRatio || 1) >= 1.5 ? 2 : 1;
+        out.push(underUrl(def.under, coords.z, coords.x, coords.y, 256 * r));
+      }
+      return out;
     },
 
     // zmiana siły cieniowania na żywo, bez ponownego pobierania kafelków

@@ -3,11 +3,13 @@ import { CONFIG } from '../config.js';
 import * as store from './store.js';
 import { createWmts2180Layer } from './wmts2180.js';
 import { ScanLayer, fitTransform, applyT, applyInv, SM } from './scanlayer.js';
+import { RetryWms } from './wms.js';
+import { stats as tileStats } from './tilequeue.js';
 import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.3.1';
+const VERSION = '0.4.0';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -154,7 +156,7 @@ const S = {
   draft: null,
   urls: [],
   picking: null,
-  settings: { showTracks: LS.get('showTracks', true), keepAwake: LS.get('keepAwake', false) },
+  settings: { showTracks: LS.get('showTracks', true), keepAwake: LS.get('keepAwake', false), coverage: LS.get('coverage', false) },
   diag: {},
   warned: new Set()
 };
@@ -281,7 +283,7 @@ function makeLayer(def) {
     };
     // Część usług Geoportalu (np. NMT) nie zna EPSG:3857: pytamy je w EPSG:4326.
     if (def.crs === '4326') w.crs = L.CRS.EPSG4326;
-    layer = L.tileLayer.wms(def.url, w);
+    layer = new RetryWms(def.url, w);
   } else if (def.type === 'scan') {
     const r = def.rec;
     layer = new ScanLayer(URL.createObjectURL(r.blob), mapTransform(r), r.w, r.h, o);
@@ -573,6 +575,7 @@ function recordPoint() {
   S.rec.gap = false;
   t.pts.push([f.lat, f.lng, f.ts, Math.round(f.acc)]);
   S.rec.line.addLatLng([f.lat, f.lng]);
+  scheduleCoverage();
   updateBar();
   if (t.pts.length - S.rec.lastSaved >= 15) {
     S.rec.lastSaved = t.pts.length;
@@ -604,6 +607,7 @@ async function stopRec() {
     }
     S.tracks.set(t.id, t);
     renderTrack(t);
+    scheduleCoverage();
   } else {
     store.del('tracks', t.id).catch(() => {});
   }
@@ -707,6 +711,7 @@ function applyFilter(id) {
   if (o) $('#filter-text').textContent = `Tylko: ${o.name}`;
   for (const p of S.pins.values()) renderPin(p);
   for (const t of S.tracks.values()) renderTrack(t);
+  scheduleCoverage();
 }
 
 /* ------------------------------------------------------------------ arkusze (dolne panele) */
@@ -2181,7 +2186,7 @@ function renderAligner() {
     title = `Dopasowanie: ${n} ${n === 1 ? 'punkt' : n < 5 ? 'punkty' : 'punktów'}`;
     text =
       n === 1
-        ? 'Dodaj drugi punkt daleko od pierwszego: ustawi skalę i obrót.'
+        ? 'Potrzebny jest drugi punkt, daleko od pierwszego: ustawi skalę i obrót. Bez dwóch punktów nie przejdziesz dalej.'
         : n === 2
           ? 'Dobrze. Trzeci punkt (z dala od prostej między tamtymi) poprawi przekrzywienie arkusza.'
           : 'Gdy skan pasuje do terenu, dotknij „Gotowe”. Kolejne punkty poprawiają dopasowanie.';
@@ -2189,7 +2194,7 @@ function renderAligner() {
       cancel,
       h('button', { type: 'button', class: 'btn', onClick: alignUndo, disabled: !n }, 'Cofnij punkt'),
       h('button', { type: 'button', class: 'btn', onClick: () => { al.step = 'A'; renderAligner(); } }, '+ Punkt'),
-      h('button', { type: 'button', class: 'btn primary', onClick: alignDone }, 'Gotowe')
+      h('button', { type: 'button', class: 'btn primary', onClick: alignDone, disabled: n < 2 }, n < 2 ? 'Gotowe (min. 2)' : 'Gotowe')
     ];
   }
   const slider = h('input', {
@@ -2261,8 +2266,8 @@ function alignUndo() {
 
 async function alignDone() {
   const al = S.aligning;
-  if (!al.pts.length) {
-    toast('Dodaj przynajmniej jeden punkt.', 3000);
+  if (al.pts.length < 2) {
+    toast('Ustaw minimum 2 punkty (daleko od siebie), inaczej skala i obrót będą zgadywane.', 4000);
     return;
   }
   al.rec.pts = al.pts;
@@ -2516,6 +2521,7 @@ async function openMenu(keepScroll = false) {
   const photoCount = [...S.pins.values()].reduce((n, p) => n + (p.photos ? p.photos.length : 0), 0);
   const mb = (n) => (n / 1048576).toFixed(n > 1048576 * 100 ? 0 : 1).replace('.', ',');
   const last = LS.get('lastBackup', null);
+  const cc = await cacheCounts();
   const importBox = h('div', { class: 'section' });
   const importInput = h('input', {
     type: 'file',
@@ -2531,6 +2537,9 @@ async function openMenu(keepScroll = false) {
     const x = S.diag[d.id] || { ok: 0, err: 0 };
     return h('div', { class: 'hint' }, `${d.name}: ${x.ok} kafelków OK, ${x.err} błędów`);
   });
+
+  const ts = tileStats;
+  diag.push(h('div', { class: 'hint' }, `Ponowienia kafelków Geoportalu: ${ts.retries}, ostatecznie nieudane: ${ts.failed}, udane: ${ts.ok}`));
 
   openSheet(
     'Dane i ustawienia',
@@ -2589,7 +2598,35 @@ async function openMenu(keepScroll = false) {
         switchRow('Nie wygaszaj ekranu', 'keepAwake', (on) => {
           if (on) acquireWake();
           else releaseWake();
-        })
+        }),
+        switchRow('Pokaż przeszukany teren (pokrycie tras)', 'coverage', setCoverage),
+        h(
+          'label',
+          { class: 'switch' },
+          h('span', null, 'Szerokość zasięgu cewki'),
+          h(
+            'select',
+            {
+              onChange: (e) => {
+                LS.set('swath', Number(e.target.value));
+                renderCoverage();
+              }
+            },
+            ...SWATHS.map((w) => h('option', { value: String(w), props: { selected: w === LS.get('swath', 2) } }, `${w} m`))
+          )
+        )
+      ),
+      h(
+        'div',
+        { class: 'section' },
+        h('h3', null, 'Mapa offline'),
+        h('p', { class: 'hint' }, cc ? `W telefonie: ${cc[OFFLINE]} pobranych + ${cc['detektor-tiles']} obejrzanych kafelków.` : 'Pamięć kafelków niedostępna w tej przeglądarce.'),
+        h(
+          'div',
+          { class: 'row-actions' },
+          h('button', { type: 'button', class: 'btn primary', onClick: openOffline }, icon('download', 18), 'Pobierz widoczny obszar'),
+          h('button', { type: 'button', class: 'btn', onClick: clearTiles }, 'Wyczyść kafelki')
+        )
       ),
       h('div', { class: 'section' }, h('h3', null, 'Diagnostyka warstw'), diag.length ? diag : h('p', { class: 'hint' }, 'Brak danych.')),
       h(
@@ -2605,6 +2642,228 @@ async function openMenu(keepScroll = false) {
     ],
     keepScroll
   );
+}
+
+/* ------------------------------------------------------------------ pokrycie terenu */
+
+const SWATHS = [1, 2, 3];
+const covGroup = L.layerGroup();
+let covRaf = 0;
+
+function renderCoverage() {
+  covGroup.clearLayers();
+  if (!S.settings.coverage) return;
+  const w = LS.get('swath', 2);
+  const lat = map.getCenter().lat;
+  const mpp = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
+  const px = Math.max(2, w / mpp);
+  const style = { color: '#2fb36b', weight: px, opacity: 0.38, lineCap: 'round', lineJoin: 'round', interactive: false };
+  const lines = [];
+  for (const t of S.tracks.values()) if (inFilter(t) && t.pts) lines.push(t.pts);
+  if (S.rec && (!S.filter || S.rec.t.outing === S.filter)) lines.push(S.rec.t.pts);
+  for (const pts of lines) {
+    if (pts.length < 2) continue;
+    L.polyline(pts.map((q) => [q[0], q[1]]), style).addTo(covGroup);
+  }
+}
+
+function scheduleCoverage() {
+  if (!S.settings.coverage || covRaf) return;
+  covRaf = requestAnimationFrame(() => {
+    covRaf = 0;
+    renderCoverage();
+  });
+}
+
+function setCoverage(on) {
+  S.settings.coverage = on;
+  if (on) {
+    covGroup.addTo(map);
+    renderCoverage();
+  } else {
+    map.removeLayer(covGroup);
+  }
+}
+map.on('zoomend', scheduleCoverage);
+
+/* ------------------------------------------------------------------ mapa offline */
+
+const OFFLINE = 'detektor-offline';
+const OFFLINE_CAP = 8000;
+
+async function cacheCounts() {
+  if (!('caches' in window)) return null;
+  try {
+    const out = {};
+    for (const n of ['detektor-tiles', OFFLINE]) out[n] = (await (await caches.open(n)).keys()).length;
+    return out;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Adresy kafelków potrzebne do pokrycia widocznego obszaru w zakresie przybliżeń.
+function offlineUrls(z0, z1) {
+  const b = map.getBounds();
+  const urls = new Set();
+  const active = ALL_DEFS.filter((d) => d.kind !== 'hist' && layerObjs.has(d.id) && map.hasLayer(layerObjs.get(d.id)) && d.type !== 'scan' && d.type !== 'image');
+  for (const d of active) {
+    const layer = layerObjs.get(d.id);
+    const nat = layer.options.maxNativeZoom;
+    for (let z = z0; z <= z1; z++) {
+      if (d.minZoom && z < d.minZoom) continue;
+      const zz = nat ? Math.min(z, nat) : z;
+      const p0 = map.project(b.getNorthWest(), zz);
+      const p1 = map.project(b.getSouthEast(), zz);
+      const n = Math.pow(2, zz);
+      const x0 = Math.max(0, Math.floor(p0.x / 256));
+      const x1 = Math.min(n - 1, Math.floor(p1.x / 256));
+      const y0 = Math.max(0, Math.floor(p0.y / 256));
+      const y1 = Math.min(n - 1, Math.floor(p1.y / 256));
+      for (let x = x0; x <= x1; x++) {
+        for (let y = y0; y <= y1; y++) {
+          const c = L.point(x, y);
+          c.z = zz;
+          if (typeof layer.urlsFor === 'function') layer.urlsFor(c).forEach((u) => urls.add(u));
+          else urls.add(layer.getTileUrl(c));
+          if (urls.size > OFFLINE_CAP * 2) return urls;
+        }
+      }
+    }
+  }
+  return urls;
+}
+
+let dl = null;
+
+async function runDownload(urls, ui) {
+  const cache = await caches.open(OFFLINE);
+  dl = { stop: false, ok: 0, skip: 0, fail: 0, total: urls.length, cors: 0 };
+  const queue = urls.slice();
+  const show = () => {
+    ui.textContent = `Pobrano ${dl.ok + dl.skip} z ${dl.total}${dl.fail ? ` · błędów: ${dl.fail}` : ''}`;
+  };
+  const worker = async () => {
+    while (queue.length && !dl.stop) {
+      const u = queue.pop();
+      if (await cache.match(u)) {
+        dl.skip++;
+        show();
+        continue;
+      }
+      let done = false;
+      for (let n = 0; n < 3 && !done && !dl.stop; n++) {
+        try {
+          const res = await fetch(u, { mode: 'cors', credentials: 'omit' });
+          if (res.ok) {
+            await cache.put(u, res);
+            dl.ok++;
+            done = true;
+          } else {
+            await new Promise((r) => setTimeout(r, 400 * (n + 1) + Math.random() * 300));
+          }
+        } catch (e) {
+          dl.cors++;
+          await new Promise((r) => setTimeout(r, 300));
+        }
+      }
+      if (!done) dl.fail++;
+      if (dl.ok === 0 && dl.fail >= 10 && dl.cors >= 10) {
+        dl.stop = true;
+        dl.corsBlocked = true;
+      }
+      show();
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  const r = dl;
+  dl = null;
+  return r;
+}
+
+async function openOffline() {
+  if (!('caches' in window) || !navigator.serviceWorker || !navigator.serviceWorker.controller) {
+    toast('Tryb offline działa po zainstalowaniu aplikacji i jej ponownym otwarciu (potrzebny service worker).', 5000);
+    return;
+  }
+  const z = Math.round(map.getZoom());
+  let z0 = z;
+  let z1 = Math.min(z + 3, 19);
+  const info = h('p', { class: 'hint' });
+  const prog = h('p', { class: 'hint' });
+  const go = h('button', { type: 'button', class: 'btn primary' }, icon('download', 18), 'Pobierz');
+  const stop = h('button', { type: 'button', class: 'btn', hidden: true, onClick: () => dl && (dl.stop = true) }, 'Przerwij');
+  let urls = [];
+  const recalc = () => {
+    z0 = Math.min(z0, z1);
+    urls = [...offlineUrls(z0, z1)];
+    const big = urls.length > OFFLINE_CAP;
+    const mb = Math.round((urls.length * 25) / 1024);
+    info.textContent = `Warstwy widoczne teraz, przybliżenia ${z0}–${z1}: ${urls.length}${urls.length > OFFLINE_CAP * 2 ? '+' : ''} plików (≈ ${mb} MB).${big ? ` Za dużo (limit ${OFFLINE_CAP}): zmniejsz obszar albo zakres.` : ''}`;
+    go.disabled = big || !urls.length;
+  };
+  const sel = (label, get, set, min, max) =>
+    h(
+      'label',
+      { class: 'switch' },
+      h('span', null, label),
+      h(
+        'select',
+        {
+          onChange: (e) => {
+            set(Number(e.target.value));
+            recalc();
+          }
+        },
+        ...Array.from({ length: max - min + 1 }, (_, i) => h('option', { value: String(min + i), props: { selected: min + i === get() } }, String(min + i)))
+      )
+    );
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    stop.hidden = false;
+    const r = await runDownload(urls, prog);
+    stop.hidden = true;
+    go.disabled = false;
+    if (r.corsBlocked) prog.textContent = 'Serwer map nie pozwala zapisywać kafelków (brak CORS). Mapa offline dla tej warstwy nie zadziała.';
+    else prog.textContent = `${r.stop ? 'Przerwano' : 'Gotowe'}: nowych ${r.ok}, już były ${r.skip}${r.fail ? `, nieudanych ${r.fail}` : ''}.`;
+  });
+  openSheet('Mapa offline', [
+    h(
+      'div',
+      { class: 'section' },
+      h('p', { class: 'hint' }, 'Zapisuje w telefonie kafelki z tego, co widzisz na mapie (aktualny podkład, LiDAR i nazwy, jeśli włączone). Ustaw najpierw obszar i warstwy, potem pobierz, najlepiej na Wi-Fi.'),
+      sel('Od przybliżenia', () => z0, (v) => (z0 = v), 8, 19),
+      sel('Do przybliżenia', () => z1, (v) => (z1 = v), 8, 19),
+      info,
+      h('div', { class: 'row-actions' }, go, stop),
+      prog
+    )
+  ]);
+  recalc();
+}
+
+async function clearTiles() {
+  try {
+    await caches.delete('detektor-tiles');
+    await caches.delete(OFFLINE);
+    toast('Usunięto zapisane kafelki map.');
+  } catch (e) {
+    toast('Nie udało się wyczyścić.', 3000);
+  }
+  openMenu(true);
+}
+
+/* ------------------------------------------------------------------ przypomnienie o kopii */
+
+function backupReminder() {
+  if (!S.pins.size) return;
+  const last = LS.get('lastBackup', 0) || 0;
+  const asked = LS.get('backupAsked', 0) || 0;
+  const day = 24 * 3600e3;
+  if (Date.now() - last > 7 * day && Date.now() - asked > day) {
+    LS.set('backupAsked', Date.now());
+    setTimeout(() => toast('Minął tydzień od ostatniej kopii zapasowej. Menu → Kopia zapasowa.', 7000), 2500);
+  }
 }
 
 /* ------------------------------------------------------------------ podpięcie przycisków i start */
@@ -2672,6 +2931,8 @@ async function boot() {
     await adoptOrphans();
     for (const p of S.pins.values()) renderPin(p);
     for (const t of S.tracks.values()) renderTrack(t);
+    if (S.settings.coverage) setCoverage(true);
+    backupReminder();
     if (S.outing) {
       LS.set('activeOuting', S.outing.id);
       startGps();

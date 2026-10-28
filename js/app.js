@@ -9,7 +9,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.6.1';
+const VERSION = '0.6.2';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -157,7 +157,7 @@ const S = {
   draft: null,
   urls: [],
   picking: null,
-  settings: { showTracks: LS.get('showTracks', true), keepAwake: LS.get('keepAwake', false) },
+  settings: { showTracks: LS.get('showTracks', true), keepAwake: LS.get('keepAwake', false), showPins: LS.get('showPins', true), showPlaces: LS.get('showPlaces', true), showBorders: LS.get('showBorders', true) },
   diag: {},
   warned: new Set()
 };
@@ -344,7 +344,8 @@ function applyLayers() {
 
 /* ------------------------------------------------------------------ znaczniki i ślady na mapie */
 
-const pinsGroup = L.layerGroup().addTo(map);
+const pinsGroup = L.layerGroup();
+if (S.settings.showPins) pinsGroup.addTo(map);
 const tracksGroup = L.layerGroup();
 if (S.settings.showTracks) tracksGroup.addTo(map);
 
@@ -760,7 +761,7 @@ function openSheet(title, nodes, keepScroll = false, extra = null) {
   releaseUrls();
   sheetTitle.textContent = title;
   $('#sheet-extra').replaceChildren(...(extra ? [extra] : []));
-  sheetBody.replaceChildren(...[].concat(nodes).filter(Boolean));
+  sheetBody.replaceChildren(...[nodes].flat(Infinity).filter(Boolean));
   sheetBody.scrollTop = top;
   sheetEl.hidden = false;
   backdrop.hidden = false;
@@ -2364,22 +2365,32 @@ function switchLine(label, hint, on, disabled, onClick) {
   return h('div', { class: 'switch' }, h('span', null, label, hint && h('small', { class: 'hint' }, hint)), btn);
 }
 
+const BASE_SHORT = { osm: 'Mapa', orto: 'Orto', 'orto-hr': 'Orto HR', 'nmt-base': 'LiDAR' };
+const svgUri = (inner) => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>${inner}</svg>`)}")`;
+const BASE_THUMBS = {
+  osm: svgUri("<rect width='64' height='64' fill='#f2efe9'/><rect x='0' y='38' width='30' height='26' fill='#c8e6b0'/><rect x='40' y='4' width='24' height='20' fill='#c8e6b0'/><path d='M0 22 Q24 18 64 34' stroke='#a7cbe8' stroke-width='5' fill='none'/><path d='M8 0 L30 64 M0 48 L64 52 M44 0 L36 64' stroke='#fff' stroke-width='3' fill='none'/><path d='M0 30 L64 12' stroke='#f5c26b' stroke-width='3'/>"),
+  orto: svgUri("<rect width='64' height='64' fill='#5c7a3e'/><rect x='0' y='0' width='28' height='24' fill='#7a9a4a'/><rect x='28' y='0' width='36' height='30' fill='#44602f'/><rect x='0' y='24' width='22' height='40' fill='#8c7a4d'/><rect x='22' y='30' width='42' height='34' fill='#3b5528'/><rect x='40' y='38' width='10' height='8' fill='#b9a98a'/><path d='M0 26 L64 34' stroke='#cdbf9a' stroke-width='2'/>"),
+  'orto-hr': svgUri("<rect width='64' height='64' fill='#587a3a'/><rect x='0' y='0' width='30' height='26' fill='#7c9c4c'/><rect x='30' y='0' width='34' height='28' fill='#46633a'/><rect x='0' y='26' width='20' height='38' fill='#8f7d52'/><rect x='20' y='28' width='44' height='36' fill='#3a5a2c'/><rect x='38' y='36' width='14' height='10' fill='#c8baa0'/><path d='M4 4v22M8 4v22M12 4v22M16 4v22M20 4v22M24 4v22' stroke='#6a8a40' stroke-width='1'/><path d='M0 27 L64 33' stroke='#d6c9a6' stroke-width='2'/>"),
+  'nmt-base': svgUri("<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#f0f0f0'/><stop offset='.5' stop-color='#9a9a9a'/><stop offset='1' stop-color='#3c3c3c'/></linearGradient></defs><rect width='64' height='64' fill='url(#g)'/><circle cx='22' cy='24' r='12' fill='#d8d8d8' opacity='.7'/><circle cx='44' cy='44' r='14' fill='#4a4a4a' opacity='.5'/><path d='M0 50 Q32 30 64 54' stroke='#fff' stroke-width='2' fill='none' opacity='.6'/>")
+};
+
 function openLayers(keepScroll = false) {
   const base = CONFIG.base.map((def) =>
     h(
       'button',
       {
         type: 'button',
-        class: 'radio-row',
+        class: 'base-tile',
         role: 'radio',
         'aria-checked': String(layerState.base === def.id),
+        title: def.name,
         onClick: () => {
           setBase(def.id);
           openLayers(true);
         }
       },
-      h('span', { class: 'mark' }),
-      def.name
+      h('span', { class: 'thumb', style: `background-image:${BASE_THUMBS[def.id] || 'none'}` }),
+      h('span', { class: 'cap' }, def.name.replace(/\s*\(.*\)\s*/, ''))
     )
   );
   const lidarOnly = layerState.base === 'nmt-base';
@@ -2394,15 +2405,26 @@ function openLayers(keepScroll = false) {
     }
   });
   const hist = histDefs().map(histRow);
+  const histOn = histDefs().filter((d) => layerState.hist[d.id]).length;
   const histCurtain = hist.length ? switchLine('Kurtyna: porównaj z dzisiejszą mapą', 'Przesuwasz pionową linię: po lewej mapa historyczna, po prawej dzisiejsza.', layerState.curtain, !anyHist(), () => { toggleCurtain(); openLayers(true); }) : null;
+  const extras = [lidarOnly || layerState.nmt ? 'LiDAR' : null, layerState.names ? 'nazwy' : null].filter(Boolean);
+  const active = activePlaceId && S.places.get(activePlaceId);
+  const vis = (label, hint, key, after) =>
+    switchLine(label, hint, S.settings[key], false, () => {
+      S.settings[key] = !S.settings[key];
+      LS.set(key, S.settings[key]);
+      after();
+      openLayers(true);
+    });
+  const shown = [S.settings.showPins && 'znaleziska', S.settings.showTracks && 'trasy', S.settings.showPlaces && 'miejsca'].filter(Boolean);
   openSheet(
     'Warstwy mapy',
     [
-      h('div', { class: 'section' }, h('h3', null, 'Podkład'), h('div', { role: 'radiogroup', class: 'section' }, base)),
-      h(
-        'div',
-        { class: 'section' },
-        h('h3', null, 'Dodatki'),
+      fold('l:base', 'Podkład', BASE_SHORT[layerState.base] || '', h('div', { role: 'radiogroup', class: 'base-grid' }, base)),
+      fold(
+        'l:extras',
+        'Dodatki',
+        extras.join(', ') || 'brak',
         switchLine(
           'Cieniowanie LiDAR na podkładzie',
           lidarOnly ? ' (wybrany sam LiDAR)' : '',
@@ -2441,7 +2463,24 @@ function openLayers(keepScroll = false) {
           openLayers(true);
         })
       ),
-      h('div', { class: 'section' }, h('h3', null, 'Mapy historyczne'), hist, hist.length ? histCurtain : h('p', { class: 'hint' }, 'Dodaj skan starej mapy (np. z Mapstera) i dopasuj go do terenu dwoma–trzema punktami.'), h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn primary', onClick: () => scanInput.click() }, icon('plus', 18), 'Dodaj mapę ze skanu'), scanInput))
+      fold(
+        'l:hist',
+        'Mapy historyczne',
+        histOn ? `${histOn} włączone` : String(hist.length),
+        hist,
+        hist.length ? histCurtain : h('p', { class: 'hint' }, 'Dodaj skan starej mapy (np. z Mapstera) i dopasuj go do terenu dwoma–trzema punktami.'),
+        h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn primary', onClick: () => scanInput.click() }, icon('plus', 18), 'Dodaj mapę ze skanu'), scanInput)
+      ),
+      fold(
+        'l:show',
+        'Widoczność',
+        shown.join(', ') || 'nic',
+        vis('Znaleziska (pinezki)', '', 'showPins', () => (S.settings.showPins ? pinsGroup.addTo(map) : map.removeLayer(pinsGroup))),
+        vis('Zapisane trasy', '', 'showTracks', () => (S.settings.showTracks ? tracksGroup.addTo(map) : map.removeLayer(tracksGroup))),
+        vis('Miejsca (pinezki)', '', 'showPlaces', () => (S.settings.showPlaces ? placesGroup.addTo(map) : map.removeLayer(placesGroup))),
+        vis('Granica wybranego miejsca', active ? ` (${active.name})` : ' (brak wybranego miejsca)', 'showBorders', refreshPlaces),
+        active && h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn', onClick: () => { selectPlace(null); openLayers(true); } }, 'Odznacz miejsce'))
+      )
     ],
     keepScroll
   );
@@ -2894,7 +2933,17 @@ const PLACE_STATUS = [
   ['dry', 'Wyczerpane']
 ];
 const statusLabel = (id) => (PLACE_STATUS.find((x) => x[0] === id) || PLACE_STATUS[0])[1];
-const placesGroup = L.layerGroup().addTo(map);
+const placesGroup = L.layerGroup();
+if (S.settings.showPlaces) placesGroup.addTo(map);
+let activePlaceId = null; // granica rysowana tylko dla wybranego miejsca
+function refreshPlaces() {
+  for (const p of S.places.values()) renderPlace(p);
+}
+function selectPlace(id) {
+  if (activePlaceId === id) return;
+  activePlaceId = id;
+  refreshPlaces();
+}
 const placeLayers = new Map();
 
 function inPoly(lat, lng, poly) {
@@ -2962,7 +3011,7 @@ function renderPlace(p) {
   normalizePlace(p);
   if (!Number.isFinite(p.lat)) return;
   const g = L.layerGroup();
-  if (hasPoly(p)) L.polygon(p.poly, { color: '#8b5cf6', weight: 3, dashArray: '8 6', fill: false, opacity: 0.9, interactive: false }).addTo(g);
+  if (hasPoly(p) && p.id === activePlaceId && S.settings.showBorders) L.polygon(p.poly, { color: '#8b5cf6', weight: 3, dashArray: '8 6', fill: false, opacity: 0.9, interactive: false }).addTo(g);
   const m = L.circleMarker([p.lat, p.lng], { radius: 9, color: '#fff', weight: 3, fillColor: '#8b5cf6', fillOpacity: 1 });
   m.bindTooltip(p.name, { direction: 'top' });
   m.on('click', () => openPlaceDetail(p.id));
@@ -3089,6 +3138,7 @@ function placeBounds(p) {
 }
 
 function focusPlace(p) {
+  selectPlace(p.id);
   const b = placeBounds(p);
   if (b) map.fitBounds(b, { padding: [30, 30] });
   else map.setView([p.lat, p.lng], Math.max(map.getZoom(), 15));
@@ -3122,6 +3172,7 @@ function openPlaceDetail(id, keepScroll = false) {
     openPlaces();
     return;
   }
+  selectPlace(id);
   const nameIn = h('input', {
     type: 'text',
     maxlength: '80',

@@ -1,4 +1,4 @@
-# Detektor 0.3.0
+# Detektor 0.3.1
 
 Mapa + GPS + dziennik znalezisk dla poszukiwacza. Aplikacja webowa (PWA), instaluje się na Androidzie z Chrome. Dane zostają w telefonie.
 
@@ -7,7 +7,7 @@ Mapa + GPS + dziennik znalezisk dla poszukiwacza. Aplikacja webowa (PWA), instal
 - **Wyjścia:** każde wyjście w teren ma własną nazwę, trasę GPS i bibliotekę znalezisk. Start: „Nowe wyjście” (nazwa opcjonalna, nagrywanie trasy można wyłączyć). W trakcie wyjścia na dole są „Znalezisko” i „Pauza” trasy; zakończenie i notatka są na karcie wyjścia (lewy przycisk). Biblioteka wyjść: przycisk „Wyjścia” (gdy nic nie trwa) albo Menu. Z karty wyjścia: pokaż tylko to wyjście na mapie, eksport GPX/GeoJSON, usunięcie.
 - Znaleziska dodane przez przytrzymanie palca na mapie poza wyjściem trafiają do „Szybkich znalezisk” z danego dnia.
 - Przerwane wyjście (zamknięta aplikacja, odświeżona strona) wznawia się samo; wyjście starsze niż 12 godzin zamyka się automatycznie.
-- Mapa: OpenStreetMap, ortofotomapa Geoportalu (zwykła i HR), sam LiDAR, przełącznik LiDAR z suwakiem siły na dowolnym podkładzie, nazwy miejscowości, ulice i numery domów (PRNG, KINA).
+- Mapa: OpenStreetMap, ortofotomapa Geoportalu (zwykła i HR), sam LiDAR, przełącznik LiDAR z suwakiem mieszania na dowolnym podkładzie (0 = sam podkład, ok. 50 = podkład z cieniowaniem terenu, 100 = sam LiDAR), nazwy miejscowości, ulice i numery domów (PRNG, KINA).
 - Twoja pozycja z dokładnością, współrzędne w WGS84 i PL-1992.
 - Znaleziska: pozycja, kategoria, znacznik „niebezpieczne”, głębokość, podłoże, sygnał, notatki, do 12 zdjęć (aparat wbudowany w aplikację, autozapis szkicu).
 - Eksport: kopia zapasowa JSON ze zdjęciami (zawiera wyjścia), GeoJSON (QGIS), GPX.
@@ -26,7 +26,11 @@ Wymagany jest https, GitHub Pages go zapewnia. Z `file://` lub zwykłego http GP
 
 ## Aktualizacja
 
-Wgraj zmienione pliki do repozytorium (Add file → Upload files, nadpisz). Przy zmianie plików zmień też numer w `CACHE` w `sw.js` (obecnie `detektor-v10`)., inaczej telefon może jeszcze przez chwilę pokazywać starą wersję.
+Wgraj zmienione pliki do repozytorium (Add file → Upload files, nadpisz). Przy zmianie plików zmień też numer w `CACHE` w `sw.js` (obecnie `detektor-v11`)., inaczej telefon może jeszcze przez chwilę pokazywać starą wersję.
+
+## Komputer
+
+Aplikacja działa też w Chrome/Edge na komputerze pod tym samym adresem (można ją zainstalować z paska adresu). Przytrzymanie palca na mapie to tam prawy przycisk myszy. Dane są osobne dla każdej przeglądarki: przenosisz je kopią zapasową JSON (ale mapy ze skanów w kopii nie ma). GPS na komputerze jest zwykle mało dokładny.
 
 ## Ważne
 

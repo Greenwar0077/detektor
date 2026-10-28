@@ -75,16 +75,27 @@ function expand(tri, px) {
   });
 }
 
-function compose(tile, alpha) {
+// mix 0 = sam podkład, ok. 0.5 = podkład z pełnym cieniowaniem terenu (mnożenie), 1 = sam LiDAR.
+function compose(tile, mix) {
   const m = tile._mix;
   const out = tile.getContext('2d');
   out.clearRect(0, 0, tile.width, tile.height);
   if (m.underImg) out.drawImage(m.underImg, 0, 0, tile.width, tile.height);
-  out.save();
-  out.globalCompositeOperation = m.underImg ? 'multiply' : 'source-over';
-  out.globalAlpha = alpha;
-  out.drawImage(m.shade, 0, 0);
-  out.restore();
+  const mul = Math.min(1, mix * 2);
+  const fade = Math.max(0, mix * 2 - 1);
+  if (mul > 0) {
+    out.save();
+    out.globalCompositeOperation = m.underImg ? 'multiply' : 'source-over';
+    out.globalAlpha = mul;
+    out.drawImage(m.shade, 0, 0);
+    out.restore();
+  }
+  if (fade > 0) {
+    out.save();
+    out.globalAlpha = fade;
+    out.drawImage(m.shade, 0, 0);
+    out.restore();
+  }
 }
 
 function loadImage(url) {
@@ -233,7 +244,7 @@ export function createWmts2180Layer(def, options) {
       }
       if (mix) {
         tile._mix = { underImg, shade };
-        compose(tile, this.options.shadeAlpha ?? 0.8);
+        compose(tile, this.options.shadeAlpha ?? 0.5);
       }
       return true;
     },

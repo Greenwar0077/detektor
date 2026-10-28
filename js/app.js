@@ -7,7 +7,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -241,7 +241,7 @@ const layerState = (() => {
     base: CONFIG.base.some((b) => b.id === s.base) ? s.base : CONFIG.base[0].id,
     last: CONFIG.base.some((b) => b.id === s.last && b.id !== 'nmt-base') ? s.last : 'orto',
     nmt: !!s.nmt,
-    nmtAlpha: Number.isFinite(s.nmtAlpha) ? Math.min(1, Math.max(0.1, s.nmtAlpha)) : 0.8,
+    nmtAlpha: Number.isFinite(s.nmtMix) ? Math.min(1, Math.max(0, s.nmtMix)) : 0.5,
     names: !!s.names,
     hist: s.hist && typeof s.hist === 'object' ? s.hist : {},
     histLast: typeof s.histLast === 'string' ? s.histLast : null,
@@ -328,6 +328,7 @@ function applyLayers() {
       map.removeLayer(existing);
     }
   }
+  layerState.nmtMix = layerState.nmtAlpha;
   LS.set('layers', layerState);
   updateQuick();
   updateCurtain();
@@ -2367,19 +2368,20 @@ function openLayers(keepScroll = false) {
           h(
             'label',
             { class: 'hint slider-line' },
-            `Siła cieniowania: ${Math.round(layerState.nmtAlpha * 100)}%`,
+            `LiDAR: ${Math.round(layerState.nmtAlpha * 100)}% (0 = sam podkład, 100 = sam LiDAR)`,
             h('input', {
               type: 'range',
-              min: '0.1',
+              min: '0',
               max: '1',
               step: '0.05',
-              'aria-label': 'Siła cieniowania LiDAR',
+              'aria-label': 'Mieszanie podkładu z LiDAR',
               props: { value: String(layerState.nmtAlpha) },
               onInput: (e) => {
                 const v = Number(e.target.value);
                 layerState.nmtAlpha = v;
-                e.target.parentNode.firstChild.nodeValue = `Siła cieniowania: ${Math.round(v * 100)}%`;
+                e.target.parentNode.firstChild.nodeValue = `LiDAR: ${Math.round(v * 100)}% (0 = sam podkład, 100 = sam LiDAR)`;
                 for (const [id, l] of layerObjs) if (id.endsWith('-nmt') && l.setShadeAlpha) l.setShadeAlpha(v);
+                layerState.nmtMix = v;
                 LS.set('layers', layerState);
               }
             })

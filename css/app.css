@@ -152,7 +152,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .bar-btn {
   min-height: 52px;
   min-width: 0;
-  padding: 0 12px;
+  padding: 0 11px;
   border-radius: 26px;
   border: 1px solid var(--line);
   background: var(--surface);
@@ -400,3 +400,13 @@ body.picking .curtain, body.sheet-open .curtain { display: none; }
 .aligner .op input { flex: 1; accent-color: var(--accent); min-height: 28px; }
 body.aligning .leaflet-bottom { bottom: 200px; }
 body.aligning .curtain { display: none; }
+
+/* ---------- poprawki układu: dolny pasek i kurtyna ---------- */
+.bar-btn { gap: 6px; font-size: 14px; }
+.bar-btn > span:empty { display: none; }
+@media (max-width: 419px) {
+  #btn-list:not(.active) { min-width: 52px; padding: 0; }
+  #btn-list:not(.active) > span { display: none; }
+}
+.fab { padding: 0 16px; font-size: 15px; gap: 6px; }
+.curtain-handle { top: 56%; }

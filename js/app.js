@@ -9,7 +9,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.6.0';
+const VERSION = '0.6.1';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -737,10 +737,29 @@ function trackUrl(blob) {
   return u;
 }
 
-function openSheet(title, nodes, keepScroll = false) {
+// Zwijana sekcja (drzewko): tytuł + krótka wartość w wierszu, treść po rozwinięciu. Stan zapamiętany.
+const foldState = new Map();
+function fold(key, title, value, ...kids) {
+  const fv = h('span', { class: 'fv' }, value || '');
+  const d = h(
+    'details',
+    {
+      class: 'fold',
+      props: { open: !!foldState.get(key) },
+      onToggle: () => foldState.set(key, d.open)
+    },
+    h('summary', null, h('span', null, title), fv),
+    h('div', { class: 'fold-body' }, kids)
+  );
+  d.fv = fv;
+  return d;
+}
+
+function openSheet(title, nodes, keepScroll = false, extra = null) {
   const top = keepScroll ? sheetBody.scrollTop : 0;
   releaseUrls();
   sheetTitle.textContent = title;
+  $('#sheet-extra').replaceChildren(...(extra ? [extra] : []));
   sheetBody.replaceChildren(...[].concat(nodes).filter(Boolean));
   sheetBody.scrollTop = top;
   sheetEl.hidden = false;
@@ -2576,10 +2595,10 @@ async function openMenu(keepScroll = false) {
   openSheet(
     'Dane i ustawienia',
     [
-      h(
-        'div',
-        { class: 'section' },
-        h('h3', null, 'Twoje dane'),
+      fold(
+        'm:data',
+        'Dane i kopia zapasowa',
+        `${S.outings.size} wyjść · ${S.pins.size} zn.`,
         h(
           'p',
           { class: 'hint' },
@@ -2601,10 +2620,10 @@ async function openMenu(keepScroll = false) {
         ),
         importBox
       ),
-      h(
-        'div',
-        { class: 'section' },
-        h('h3', null, 'Eksport do innych programów'),
+      fold(
+        'm:export',
+        'Eksport do innych programów',
+        'GPX, GeoJSON',
         h(
           'div',
           { class: 'row-actions' },
@@ -2613,16 +2632,16 @@ async function openMenu(keepScroll = false) {
         ),
         h('p', { class: 'hint' }, 'To eksport wszystkich wyjść naraz (bez zdjęć). Pojedyncze wyjście wyeksportujesz z jego karty.')
       ),
-      h(
-        'div',
-        { class: 'section' },
-        h('h3', null, `Wyjścia (${S.outings.size})`),
+      fold(
+        'm:outings',
+        'Wyjścia',
+        String(S.outings.size),
         h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn', onClick: () => openOutings() }, 'Otwórz bibliotekę wyjść'))
       ),
-      h(
-        'div',
-        { class: 'section' },
-        h('h3', null, 'Ustawienia'),
+      fold(
+        'm:settings',
+        'Ustawienia',
+        '',
         switchRow('Pokazuj zapisane trasy na mapie', 'showTracks', (on) => {
           if (on) tracksGroup.addTo(map);
           else map.removeLayer(tracksGroup);
@@ -2632,10 +2651,10 @@ async function openMenu(keepScroll = false) {
           else releaseWake();
         })
       ),
-      h(
-        'div',
-        { class: 'section' },
-        h('h3', null, 'Mapa offline'),
+      fold(
+        'm:offline',
+        'Mapa offline',
+        cc ? `${cc[OFFLINE]} kafelków` : '',
         h('p', { class: 'hint' }, cc ? `W telefonie: ${cc[OFFLINE]} pobranych + ${cc['detektor-tiles']} obejrzanych kafelków.` : 'Pamięć kafelków niedostępna w tej przeglądarce.'),
         h(
           'div',
@@ -2644,10 +2663,10 @@ async function openMenu(keepScroll = false) {
           h('button', { type: 'button', class: 'btn', onClick: clearTiles }, 'Wyczyść kafelki')
         )
       ),
-      h(
-        'div',
-        { class: 'section' },
-        h('h3', null, 'Narzędzia testowe'),
+      fold(
+        'm:test',
+        'Narzędzia testowe',
+        '',
         h('p', { class: 'hint' }, 'Przykładowa wyprawa wokół środka mapy (trasa + 8 znalezisk) do sprawdzania listy, filtrów, eksportu i kopii. Oznaczona [TEST].'),
         h(
           'div',
@@ -2656,11 +2675,11 @@ async function openMenu(keepScroll = false) {
           h('button', { type: 'button', class: 'btn', onClick: removeDemoData }, 'Usuń dane testowe')
         )
       ),
-      h('div', { class: 'section' }, h('h3', null, 'Diagnostyka warstw'), diag.length ? diag : h('p', { class: 'hint' }, 'Brak danych.')),
-      h(
-        'div',
-        { class: 'section' },
-        h('h3', null, 'O aplikacji'),
+      fold('m:diag', 'Diagnostyka warstw', '', diag.length ? diag : h('p', { class: 'hint' }, 'Brak danych.')),
+      fold(
+        'm:about',
+        'O aplikacji',
+        VERSION,
         h(
           'p',
           { class: 'hint' },
@@ -2793,6 +2812,8 @@ async function openOffline(opts = {}) {
   const stop = h('button', { type: 'button', class: 'btn', hidden: true, onClick: () => dl && (dl.stop = true) }, 'Przerwij');
   const scopeRow = h('div', { class: 'row-actions' });
   const checks = h('div', null);
+  const scopeFold = fold('o:scope', 'Zakres', '', scopeRow);
+  const whatFold = fold('o:what', 'Co zapisać', '', checks, h('p', { class: 'hint' }, 'Ortofotomapa + LiDAR razem wystarczą, żeby offline działały też widoki łączone. Twoje skany map historycznych są zawsze w telefonie. Podkładu OSM nie zapisujemy: jego serwery nie zezwalają na pobieranie na zapas.'));
   let urls = [];
 
   const recalc = () => {
@@ -2810,6 +2831,8 @@ async function openOffline(opts = {}) {
         ? `To ${urls.length > OFFLINE_CAP * 2 ? 'ponad ' + OFFLINE_CAP * 2 : urls.length} plików, za dużo na raz. Zmniejsz obszar (przybliż mapę) albo odznacz warstwę.`
         : `Przybliżenia ${z0}–18: ${urls.length} plików, ok. ${mb} MB (orientacyjnie). Najlepiej na Wi-Fi.`;
     go.disabled = big || !urls.length;
+    scopeFold.fv.textContent = st.scope === 'border' ? 'Granica miejsca' : 'Ekran';
+    whatFold.fv.textContent = ids.map((i) => OFFLINE_SOURCES.find((x) => x.id === i).label.split(' (')[0]).join(', ') || 'nic';
     scopeRow.replaceChildren(
       ...[
         h('button', { type: 'button', class: 'opt', 'aria-pressed': String(st.scope === 'screen'), onClick: () => { st.scope = 'screen'; recalc(); } }, 'To, co na ekranie'),
@@ -2840,12 +2863,9 @@ async function openOffline(opts = {}) {
     h(
       'div',
       { class: 'section' },
-      place && h('p', null, `Miejsce: ${place.name}`),
-      h('h3', null, 'Zakres'),
-      scopeRow,
-      h('h3', null, 'Co zapisać'),
-      checks,
-      h('p', { class: 'hint' }, 'Ortofotomapa + LiDAR razem wystarczą, żeby offline działały też widoki łączone. Twoje skany map historycznych są zawsze w telefonie. Podkładu OSM nie zapisujemy: jego serwery nie zezwalają na pobieranie na zapas.'),
+      place && h('p', { class: 'sub' }, `Miejsce: ${place.name}`),
+      scopeFold,
+      whatFold,
       info,
       h('div', { class: 'row-actions' }, opts.back && h('button', { type: 'button', class: 'btn', onClick: opts.back }, '← Wróć'), go, stop),
       prog
@@ -2985,6 +3005,7 @@ function openPlaces(keepScroll = false) {
 /* rysowanie granicy: kolejne punkty wskazujesz celownikiem (jak przy dopasowaniu skanu) */
 
 let draw = null;
+const placeEdit = { id: null, on: false }; // czy nagłówek karty miejsca jest w trybie edycji
 
 function dropDraw() {
   if (!draw) return;
@@ -3111,6 +3132,7 @@ function openPlaceDetail(id, keepScroll = false) {
       e.target.value = p.name;
       savePlace(p);
       renderPlace(p);
+      openPlaceDetail(id, true);
     }
   });
   const statusSel = h(
@@ -3167,7 +3189,7 @@ function openPlaceDetail(id, keepScroll = false) {
       const f = e.target.files[0];
       e.target.value = '';
       if (f) {
-        map.fitBounds(placeBounds(p), { padding: [20, 20] });
+        focusPlace(p);
         importScan(f, id);
       }
     }
@@ -3243,50 +3265,86 @@ function openPlaceDetail(id, keepScroll = false) {
     );
   showDel();
 
+  const pins = outs.flatMap((o) => outingPins(o.id));
+  const byCat = new Map();
+  for (const q of pins) byCat.set(q.cat, (byCat.get(q.cat) || 0) + 1);
+  const finds = pins.length
+    ? [
+        h('p', { class: 'sub' }, `${pins.length} ${pins.length === 1 ? 'znalezisko' : 'znalezisk'} w ${outs.length} ${outs.length === 1 ? 'wyjściu' : 'wyjściach'}`),
+        h('div', { class: 'chips' }, [...byCat.entries()].sort((x, y) => y[1] - x[1]).map(([cat, n]) => h('span', { class: 'chip' }, `${catLabel(cat)} ×${n}`)))
+      ]
+    : h('p', { class: 'sub' }, outs.length ? 'Z tych wyjść jeszcze nic nie dodano.' : 'Jeszcze nic tu nie znaleziono.');
+
+  if (placeEdit.id !== id) {
+    placeEdit.id = id;
+    placeEdit.on = false;
+  }
+  const pencil = h(
+    'button',
+    {
+      type: 'button',
+      class: 'round small',
+      'aria-label': 'Edytuj nazwę, status i priorytet',
+      'aria-pressed': String(placeEdit.on),
+      onClick: () => {
+        placeEdit.on = !placeEdit.on;
+        openPlaceDetail(id, true);
+      }
+    },
+    icon('edit', 18)
+  );
+  const head = placeEdit.on
+    ? h(
+        'div',
+        { class: 'section' },
+        h('div', { class: 'field' }, h('label', null, 'Nazwa'), nameIn),
+        h('div', { class: 'two' }, h('div', { class: 'field' }, h('label', null, 'Status'), statusSel), h('div', { class: 'field' }, h('label', null, 'Priorytet'), prioSel))
+      )
+    : h('p', { class: 'sub' }, `${statusLabel(p.status)} · priorytet ${p.priority || 3}`);
+
+  const borderBody = [
+    h('p', { class: 'hint' }, hasPoly(p) ? `Obecna granica: ${fmtHa(polyHa(p.poly))}.` : 'Bez granicy to tylko punkt. Ustaw mapę tak, żeby na ekranie był cały interesujący Cię teren, i użyj ekranu jako granicy.'),
+    h('button', { type: 'button', class: 'btn primary', onClick: () => setScreenBorder(p) }, hasPoly(p) ? 'Ustaw na obecny ekran' : 'Użyj ekranu jako granicy'),
+    h('button', { type: 'button', class: 'btn', onClick: () => startPlaceDraw(p) }, 'Rysuj ręcznie'),
+    hasPoly(p) && h('button', { type: 'button', class: 'btn', onClick: async () => { p.poly = []; await savePlace(p); renderPlace(p); openPlaceDetail(id, true); } }, 'Usuń granicę')
+  ];
+
   openSheet(
     p.name,
     [
-      h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn', onClick: () => openPlaces() }, '← Miejsca')),
-      h('div', { class: 'field' }, h('label', null, 'Nazwa'), nameIn),
-      h('div', { class: 'field' }, h('label', null, 'Status'), statusSel),
-      h('div', { class: 'field' }, h('label', null, 'Priorytet'), prioSel),
-      h('p', { class: 'hint' }, hasPoly(p) ? `Granica: ${fmtHa(polyHa(p.poly))} (${p.poly.length === 4 ? 'prostokąt z ekranu lub 4 punkty' : p.poly.length + ' punktów'}).` : 'Samo miejsce bez granicy. Granicę ustawisz jednym dotknięciem poniżej, kiedy na ekranie mieści się interesujący Cię teren.'),
-      h('div', { class: 'field' }, h('label', null, 'Kontekst historyczny i notatki'), noteIn),
+      head,
+      finds,
       h(
         'div',
         { class: 'row-actions' },
         h('button', { type: 'button', class: 'btn primary', onClick: () => { closeSheet(); focusPlace(p); } }, icon('layers', 18), 'Pokaż na mapie'),
-        h('button', { type: 'button', class: 'btn', onClick: () => openOffline({ place: p, back: () => openPlaceDetail(id) }) }, icon('download', 18), 'Zapisz offline')
+        h('button', { type: 'button', class: 'btn', onClick: () => openOffline({ place: p, back: () => openPlaceDetail(id) }) }, icon('download', 18), 'Mapa offline')
       ),
-      h(
-        'div',
-        { class: 'row-actions' },
-        h('button', { type: 'button', class: 'btn', onClick: () => setScreenBorder(p) }, hasPoly(p) ? 'Granica = obecny ekran' : 'Użyj ekranu jako granicy'),
-        h('button', { type: 'button', class: 'btn', onClick: () => startPlaceDraw(p) }, 'Rysuj granicę ręcznie'),
-        hasPoly(p) && h('button', { type: 'button', class: 'btn', onClick: async () => { p.poly = []; await savePlace(p); renderPlace(p); openPlaceDetail(id, true); } }, 'Usuń granicę')
-      ),
-      h(
-        'div',
-        { class: 'section' },
-        h('h3', null, `Mapy historyczne (${maps.length})`),
-        ...mapRows,
+      fold('p:border', 'Granica', hasPoly(p) ? fmtHa(polyHa(p.poly)) : 'brak', borderBody),
+      fold('p:note', 'Kontekst i notatki', p.note ? 'jest' : 'pusto', noteIn),
+      fold(
+        'p:maps',
+        'Mapy historyczne',
+        String(maps.length),
+        mapRows,
         !maps.length && h('p', { class: 'hint' }, 'Dodaj skan starej mapy: ustawisz go na mapie dwoma punktami i zostanie przypisany do tego miejsca.'),
         h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn', onClick: () => scanInput.click() }, icon('upload', 18), 'Dodaj mapę historyczną'), scanInput),
         attachMap && h('div', { class: 'field' }, attachMap)
       ),
-      h(
-        'div',
-        { class: 'section' },
-        h('h3', null, `Wyjścia (${outs.length})`),
+      fold(
+        'p:outs',
+        'Wyjścia',
+        String(outs.length),
         outs.length ? h('div', { class: 'list' }, outs.map(outingCard)) : h('p', { class: 'hint' }, 'Wyjścia rozpoczęte, gdy stoisz w granicy miejsca, przypisują się same. Pozostałe przypiszesz tutaj albo w karcie wyjścia.'),
         attachOut && h('div', { class: 'field' }, attachOut)
       ),
-      delWrap
+      fold('p:finds', 'Znaleziska', String(pins.length), pinListNode(pins.sort((x, y) => y.ts - x.ts), 'Brak znalezisk w wyjściach tego miejsca.')),
+      fold('p:more', 'Więcej', '', delWrap)
     ],
-    keepScroll
+    keepScroll,
+    pencil
   );
 }
-
 
 /* ------------------------------------------------------------------ menu na mapie (przytrzymanie / prawy przycisk) */
 

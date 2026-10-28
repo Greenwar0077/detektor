@@ -1,6 +1,6 @@
 // Service worker: przechowuje pliki aplikacji, żeby uruchamiała się bez internetu.
 // Kafelki OSM i Geoportalu trafiają do osobnych pamięci (obejrzane + pobrane offline).
-const CACHE = 'detektor-v18';
+const CACHE = 'detektor-v19';
 const TILE_CACHE = 'detektor-tiles'; // kafelki obejrzane na mapie (przycinany)
 const OFFLINE_CACHE = 'detektor-offline'; // kafelki pobrane świadomie (nie przycinany)
 const MAX_TILES = 4000;

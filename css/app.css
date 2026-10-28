@@ -223,7 +223,10 @@ body.picking .leaflet-bottom { bottom: 70px; }
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 14px var(--gutter-r) 8px var(--gutter-l);
 }
-.sheet-head h2 { margin: 0; font-size: 19px; line-height: 1.2; text-wrap: balance; }
+.sheet-head h2 { margin: 0; font-size: 19px; line-height: 1.2; text-wrap: balance; flex: 1; min-width: 0; }
+.head-extra { display: flex; gap: 8px; }
+.head-extra:empty { display: none; }
+.head-extra .round[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
 .sheet-body {
   overflow-y: auto; overscroll-behavior: contain;
   padding: 4px var(--gutter-r) calc(env(safe-area-inset-bottom, 0px) + 20px) var(--gutter-l);
@@ -414,3 +417,22 @@ body.aligning .curtain { display: none; }
 .ctx-popup .leaflet-popup-content { margin: 10px; }
 .ctx { display: grid; gap: 8px; }
 .ctx .hint { font: 12px var(--mono); }
+
+/* ---------- zwijane sekcje (drzewko) ---------- */
+.fold { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.fold > summary {
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  min-height: 52px; padding: 0 14px; cursor: pointer; font-weight: 650;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary .fv { margin-left: auto; color: var(--muted); font-weight: 500; font-size: 14px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.fold > summary::after {
+  content: ''; flex: none; width: 8px; height: 8px; margin-left: 4px;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg); transition: transform 0.15s;
+}
+.fold[open] > summary::after { transform: rotate(45deg); }
+.fold > .fold-body { padding: 2px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+.sub { margin: 0; color: var(--muted); font-size: 15px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 4px 10px; border-radius: 999px; background: var(--surface-2); font-size: 13px; font-weight: 600; }

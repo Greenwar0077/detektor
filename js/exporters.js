@@ -199,13 +199,21 @@ export function parseBackup(text) {
   }
   const places = [];
   for (const q of Array.isArray(data.places) ? data.places : []) {
-    if (!q || typeof q.id !== 'string' || !Array.isArray(q.poly)) continue;
-    const poly = q.poly.filter((c) => Array.isArray(c) && num(c[0]) !== null && num(c[1]) !== null).map((c) => [c[0], c[1]]);
-    if (poly.length < 3) continue;
+    if (!q || typeof q.id !== 'string') continue;
+    const poly = (Array.isArray(q.poly) ? q.poly : []).filter((c) => Array.isArray(c) && num(c[0]) !== null && num(c[1]) !== null).map((c) => [c[0], c[1]]);
+    let lat = num(q.lat);
+    let lng = num(q.lng);
+    if ((lat === null || lng === null) && poly.length >= 3) {
+      lat = poly.reduce((s, c) => s + c[0], 0) / poly.length;
+      lng = poly.reduce((s, c) => s + c[1], 0) / poly.length;
+    }
+    if (lat === null || lng === null) continue;
     places.push({
       id: q.id.slice(0, 80),
       name: str(q.name, 80) || 'Miejsce',
-      poly,
+      lat,
+      lng,
+      poly: poly.length >= 3 ? poly : [],
       note: str(q.note, 5000),
       status: ['todo', 'plan', 'done', 'dry'].includes(q.status) ? q.status : 'todo',
       priority: Math.min(5, Math.max(1, Math.round(num(q.priority) ?? 3))),

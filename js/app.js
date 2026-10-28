@@ -9,7 +9,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -211,11 +211,8 @@ map.on('dragstart', () => {
     updateLocateBtn();
   }
 });
-// Długie przytrzymanie mapy: dodaj znalezisko w tym miejscu.
-map.on('contextmenu', (e) => {
-  if (S.picking || S.aligning) return;
-  openForm(null, { lat: e.latlng.lat, lng: e.latlng.lng, acc: null, src: 'pick' });
-});
+// Długie przytrzymanie mapy (na komputerze prawy przycisk): menu z dodaniem miejsca lub znaleziska.
+map.on('contextmenu', (e) => showMapMenu(e.latlng));
 
 // Cieniowanie LiDAR na dowolnym podkładzie: osobny wariant podkładu, który sam miksuje
 // kafelki (nie wymaga mix-blend-mode, działa w każdej przeglądarce).
@@ -2474,6 +2471,7 @@ async function applyImport(data) {
     S.outings.set(o.id, o);
   }
   for (const q of data.places || []) {
+    normalizePlace(q);
     await store.put('places', q);
     S.places.set(q.id, q);
     renderPlace(q);
@@ -2690,15 +2688,23 @@ async function cacheCounts() {
   }
 }
 
-// Adresy kafelków potrzebne do pokrycia obszaru `b` w zakresie przybliżeń z0..z1 (dla włączonych warstw).
-function offlineUrls(z0, z1, b) {
+// Źródła do zapisu offline. OSM celowo pominięte: serwery OpenStreetMap zabraniają pobierania na zapas.
+const OFFLINE_SOURCES = [
+  { id: 'orto', label: 'Ortofotomapa', kb: 30, on: true },
+  { id: 'nmt-base', label: 'LiDAR (cieniowanie terenu)', kb: 40, on: false }
+];
+
+// Adresy kafelków do zapisu obszaru `b` w zakresie przybliżeń z0..z1 dla wybranych źródeł.
+// Adresy składamy sami (getTileUrl Leafleta zależy od bieżącego zoomu mapy, więc się nie nadaje).
+function offlineUrls(z0, z1, b, ids) {
   const urls = new Set();
-  const active = ALL_DEFS.filter((d) => d.kind !== 'hist' && layerObjs.has(d.id) && map.hasLayer(layerObjs.get(d.id)) && d.type !== 'scan' && d.type !== 'image');
-  for (const d of active) {
-    const layer = layerObjs.get(d.id);
-    const nat = layer.options.maxNativeZoom;
+  for (const id of ids) {
+    const def = ALL_DEFS.find((d) => d.id === id);
+    if (!def) continue;
+    const layer = def.type === 'wmts2180' ? getLayer(def) : null;
+    const nat = def.maxNativeZoom;
     for (let z = z0; z <= z1; z++) {
-      if (d.minZoom && z < d.minZoom) continue;
+      if (def.minZoom && z < def.minZoom) continue;
       const zz = nat ? Math.min(z, nat) : z;
       const p0 = map.project(b.getNorthWest(), zz);
       const p1 = map.project(b.getSouthEast(), zz);
@@ -2709,10 +2715,13 @@ function offlineUrls(z0, z1, b) {
       const y1 = Math.min(n - 1, Math.floor(p1.y / 256));
       for (let x = x0; x <= x1; x++) {
         for (let y = y0; y <= y1; y++) {
-          const c = L.point(x, y);
-          c.z = zz;
-          if (typeof layer.urlsFor === 'function') layer.urlsFor(c).forEach((u) => urls.add(u));
-          else urls.add(layer.getTileUrl(c));
+          if (layer) {
+            const c = L.point(x, y);
+            c.z = zz;
+            layer.urlsFor(c).forEach((u) => urls.add(u));
+          } else if (def.type === 'xyz') {
+            urls.add(def.url.replace('{z}', zz).replace('{x}', x).replace('{y}', y));
+          }
           if (urls.size > OFFLINE_CAP * 2) return urls;
         }
       }
@@ -2768,23 +2777,56 @@ async function runDownload(urls, ui) {
   return r;
 }
 
-// Zapis obszaru offline: bez ustawień. Obszar = to, co widać na ekranie (albo granica miejsca),
-// przybliżenia od obecnego do 18, warstwy takie, jakie są teraz włączone.
+// Zapis obszaru offline: zakres (ekran albo granica miejsca) i warstwy do wyboru, przybliżenia do 18.
 async function openOffline(opts = {}) {
   if (!('caches' in window) || !navigator.serviceWorker || !navigator.serviceWorker.controller) {
     toast('Tryb offline działa po zainstalowaniu aplikacji i jej ponownym otwarciu (potrzebny service worker).', 5000);
     return;
   }
-  const b = opts.bounds || map.getBounds();
-  const z1 = 18;
-  const z0 = opts.bounds ? 13 : Math.min(Math.max(6, Math.round(map.getZoom())), z1);
-  const urls = [...offlineUrls(z0, z1, b)];
-  const big = urls.length > OFFLINE_CAP;
-  const mb = Math.round((urls.length * 25) / 1024);
-  const what = opts.title ? `„${opts.title}”` : 'widoczny teraz obszar';
+  const place = opts.place || null;
+  const screenB = map.getBounds();
+  const screenZ = Math.min(Math.max(6, Math.round(map.getZoom())), 18);
+  const st = { scope: place && hasPoly(place) ? 'border' : 'screen', pick: new Set(OFFLINE_SOURCES.filter((s) => s.on).map((s) => s.id)) };
+  const info = h('p', { class: 'hint' });
   const prog = h('p', { class: 'hint' });
-  const go = h('button', { type: 'button', class: 'btn primary', disabled: big || !urls.length }, icon('download', 18), 'Zapisz');
+  const go = h('button', { type: 'button', class: 'btn primary' }, icon('download', 18), 'Zapisz');
   const stop = h('button', { type: 'button', class: 'btn', hidden: true, onClick: () => dl && (dl.stop = true) }, 'Przerwij');
+  const scopeRow = h('div', { class: 'row-actions' });
+  const checks = h('div', null);
+  let urls = [];
+
+  const recalc = () => {
+    const b = st.scope === 'border' && place ? placeBounds(place) : screenB;
+    const z0 = st.scope === 'border' ? 13 : screenZ;
+    const ids = [...st.pick];
+    urls = [...offlineUrls(z0, 18, b, ids)];
+    const kb = ids.reduce((a, id) => a + (OFFLINE_SOURCES.find((s) => s.id === id).kb || 30), 0) / Math.max(1, ids.length);
+    const mb = Math.round((urls.length * kb) / 1024);
+    const big = urls.length > OFFLINE_CAP;
+    info.className = big ? 'banner danger' : 'hint';
+    info.textContent = !ids.length
+      ? 'Zaznacz przynajmniej jedną warstwę.'
+      : big
+        ? `To ${urls.length > OFFLINE_CAP * 2 ? 'ponad ' + OFFLINE_CAP * 2 : urls.length} plików, za dużo na raz. Zmniejsz obszar (przybliż mapę) albo odznacz warstwę.`
+        : `Przybliżenia ${z0}–18: ${urls.length} plików, ok. ${mb} MB (orientacyjnie). Najlepiej na Wi-Fi.`;
+    go.disabled = big || !urls.length;
+    scopeRow.replaceChildren(
+      ...[
+        h('button', { type: 'button', class: 'opt', 'aria-pressed': String(st.scope === 'screen'), onClick: () => { st.scope = 'screen'; recalc(); } }, 'To, co na ekranie'),
+        place && hasPoly(place) && h('button', { type: 'button', class: 'opt', 'aria-pressed': String(st.scope === 'border'), onClick: () => { st.scope = 'border'; recalc(); } }, 'Granica miejsca')
+      ].filter(Boolean)
+    );
+  };
+  for (const src of OFFLINE_SOURCES) {
+    checks.append(
+      h(
+        'label',
+        { class: 'switch' },
+        h('span', null, src.label),
+        h('input', { type: 'checkbox', props: { checked: st.pick.has(src.id) }, onChange: (e) => { if (e.target.checked) st.pick.add(src.id); else st.pick.delete(src.id); recalc(); } })
+      )
+    );
+  }
   go.addEventListener('click', async () => {
     go.disabled = true;
     stop.hidden = false;
@@ -2798,18 +2840,18 @@ async function openOffline(opts = {}) {
     h(
       'div',
       { class: 'section' },
-      h('p', null, `Zapisuję ${what}, przybliżenia ${z0}–${z1}, włączone teraz warstwy (podkład, LiDAR, nazwy).`),
-      h(
-        'p',
-        { class: big ? 'banner danger' : 'hint' },
-        big
-          ? `To ${urls.length > OFFLINE_CAP * 2 ? 'ponad ' + OFFLINE_CAP * 2 : urls.length} plików, za dużo na raz. Przybliż mapę, żeby obejmowała mniejszy teren.`
-          : `${urls.length} plików, ok. ${mb} MB. Najlepiej na Wi-Fi.`
-      ),
+      place && h('p', null, `Miejsce: ${place.name}`),
+      h('h3', null, 'Zakres'),
+      scopeRow,
+      h('h3', null, 'Co zapisać'),
+      checks,
+      h('p', { class: 'hint' }, 'Ortofotomapa + LiDAR razem wystarczą, żeby offline działały też widoki łączone. Twoje skany map historycznych są zawsze w telefonie. Podkładu OSM nie zapisujemy: jego serwery nie zezwalają na pobieranie na zapas.'),
+      info,
       h('div', { class: 'row-actions' }, opts.back && h('button', { type: 'button', class: 'btn', onClick: opts.back }, '← Wróć'), go, stop),
       prog
     )
   ]);
+  recalc();
 }
 
 async function clearTiles() {
@@ -2845,9 +2887,33 @@ function inPoly(lat, lng, poly) {
   return inside;
 }
 
+const POINT_RADIUS_M = 500; // miejsce bez granicy: wyjście w tym promieniu od punktu przypisuje się samo
+const hasPoly = (p) => !!p.poly && p.poly.length >= 3;
+
+function normalizePlace(p) {
+  if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) {
+    if (hasPoly(p)) {
+      p.lat = p.poly.reduce((a, c) => a + c[0], 0) / p.poly.length;
+      p.lng = p.poly.reduce((a, c) => a + c[1], 0) / p.poly.length;
+    }
+  }
+  if (!Array.isArray(p.poly)) p.poly = [];
+  return p;
+}
+
 function placeAt(lat, lng) {
-  for (const p of S.places.values()) if (p.poly && p.poly.length >= 3 && inPoly(lat, lng, p.poly)) return p;
-  return null;
+  for (const p of S.places.values()) if (hasPoly(p) && inPoly(lat, lng, p.poly)) return p;
+  let best = null;
+  let bd = POINT_RADIUS_M;
+  for (const p of S.places.values()) {
+    if (hasPoly(p) || !Number.isFinite(p.lat)) continue;
+    const d = haversine(lat, lng, p.lat, p.lng);
+    if (d <= bd) {
+      bd = d;
+      best = p;
+    }
+  }
+  return best;
 }
 
 // powierzchnia w hektarach (przybliżenie płaskie, wystarczy dla lasu czy pola)
@@ -2865,16 +2931,24 @@ function polyHa(poly) {
 }
 const fmtHa = (ha) => (ha >= 100 ? `${(ha / 100).toFixed(1).replace('.', ',')} km²` : `${ha.toFixed(ha < 10 ? 1 : 0).replace('.', ',')} ha`);
 
-function renderPlace(p) {
-  const old = placeLayers.get(p.id);
+function removePlaceLayer(id) {
+  const old = placeLayers.get(id);
   if (old) placesGroup.removeLayer(old);
-  placeLayers.delete(p.id);
-  if (!p.poly || p.poly.length < 3) return;
-  const poly = L.polygon(p.poly, { color: '#8b5cf6', weight: 3, dashArray: '8 6', fill: false, opacity: 0.9 });
-  poly.bindTooltip(p.name, { sticky: true });
-  poly.on('click', () => openPlaceDetail(p.id));
-  poly.addTo(placesGroup);
-  placeLayers.set(p.id, poly);
+  placeLayers.delete(id);
+}
+
+function renderPlace(p) {
+  removePlaceLayer(p.id);
+  normalizePlace(p);
+  if (!Number.isFinite(p.lat)) return;
+  const g = L.layerGroup();
+  if (hasPoly(p)) L.polygon(p.poly, { color: '#8b5cf6', weight: 3, dashArray: '8 6', fill: false, opacity: 0.9, interactive: false }).addTo(g);
+  const m = L.circleMarker([p.lat, p.lng], { radius: 9, color: '#fff', weight: 3, fillColor: '#8b5cf6', fillOpacity: 1 });
+  m.bindTooltip(p.name, { direction: 'top' });
+  m.on('click', () => openPlaceDetail(p.id));
+  m.addTo(g);
+  g.addTo(placesGroup);
+  placeLayers.set(p.id, g);
 }
 
 const placeOutings = (id) => [...S.outings.values()].filter((o) => o.place === id).sort((a, b) => b.start - a.start);
@@ -2885,7 +2959,7 @@ const savePlace = (p) => {
 };
 
 function placeCard(p) {
-  const meta = [statusLabel(p.status), `priorytet ${p.priority || 3}`, fmtHa(polyHa(p.poly)), `${placeOutings(p.id).length} wyjść`, `${placeMaps(p.id).length} map`].join(' · ');
+  const meta = [statusLabel(p.status), `priorytet ${p.priority || 3}`, hasPoly(p) ? fmtHa(polyHa(p.poly)) : 'sam punkt', `${placeOutings(p.id).length} wyjść`, `${placeMaps(p.id).length} map`].join(' · ');
   return h(
     'button',
     { type: 'button', class: 'item', onClick: () => openPlaceDetail(p.id) },
@@ -2899,10 +2973,10 @@ function openPlaces(keepScroll = false) {
   openSheet(
     `Miejsca (${list.length})`,
     [
-      h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn primary', onClick: () => startPlaceDraw(null) }, icon('plus', 18), 'Nowe miejsce')),
+      h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn primary', onClick: () => addPlaceAt(map.getCenter()) }, icon('plus', 18), 'Dodaj miejsce w środku mapy')),
       list.length
         ? h('div', { class: 'list' }, list.map(placeCard))
-        : h('p', { class: 'hint' }, 'Miejsce to teren, który chcesz zbadać (las, pole, dawny folwark). Zaznaczasz go na mapie, a potem dopisujesz notatkę, mapy historyczne i wyjścia.')
+        : h('p', { class: 'hint' }, 'Miejsce to teren, który chcesz zbadać (las, pole, dawny folwark). Przytrzymaj palec na mapie (na komputerze: prawy przycisk) i wybierz „Dodaj miejsce tutaj”. Potem dopiszesz notatkę, mapy historyczne i wyjścia.')
     ],
     keepScroll
   );
@@ -2939,7 +3013,7 @@ function renderDraw() {
     onInput: (e) => (d.name = e.target.value)
   });
   const n = d.pts.length;
-  openSheet(d.existing ? 'Nowa granica miejsca' : 'Nowe miejsce', [
+  openSheet('Granica miejsca (ręcznie)', [
     h('div', { class: 'field' }, h('label', null, 'Nazwa'), nameIn),
     h(
       'p',
@@ -2979,12 +3053,9 @@ function renderDraw() {
 async function savePlaceDraw() {
   const d = draw;
   if (!d || d.pts.length < 3) return;
-  let p = d.existing;
-  if (!p) {
-    p = { id: store.uid(), name: '', poly: [], note: '', status: 'todo', priority: 3, created: Date.now() };
-    p.name = d.name.trim() || `Miejsce ${S.places.size + 1}`;
-    S.places.set(p.id, p);
-  } else if (d.name.trim()) p.name = d.name.trim();
+  const p = d.existing;
+  if (!p) return;
+  if (d.name.trim()) p.name = d.name.trim();
   p.poly = d.pts.map((c) => [c[0], c[1]]);
   await savePlace(p);
   renderPlace(p);
@@ -2993,7 +3064,35 @@ async function savePlaceDraw() {
 }
 
 function placeBounds(p) {
-  return L.latLngBounds(p.poly);
+  return hasPoly(p) ? L.latLngBounds(p.poly) : null;
+}
+
+function focusPlace(p) {
+  const b = placeBounds(p);
+  if (b) map.fitBounds(b, { padding: [30, 30] });
+  else map.setView([p.lat, p.lng], Math.max(map.getZoom(), 15));
+}
+
+async function addPlaceAt(ll) {
+  const names = new Set([...S.places.values()].map((q) => q.name));
+  let n = S.places.size + 1;
+  while (names.has(`Miejsce ${n}`)) n++;
+  const p = { id: store.uid(), name: `Miejsce ${n}`, lat: ll.lat, lng: ll.lng, poly: [], note: '', status: 'todo', priority: 3, created: Date.now() };
+  S.places.set(p.id, p);
+  await savePlace(p);
+  renderPlace(p);
+  map.panTo([p.lat, p.lng]);
+  openPlaceDetail(p.id);
+}
+
+// Granica = prostokąt widoczny na ekranie.
+async function setScreenBorder(p) {
+  const b = map.getBounds();
+  p.poly = [b.getNorthWest(), b.getNorthEast(), b.getSouthEast(), b.getSouthWest()].map((c) => [c.lat, c.lng]);
+  await savePlace(p);
+  renderPlace(p);
+  toast(`Granica ustawiona: ${fmtHa(polyHa(p.poly))}.`, 3500);
+  openPlaceDetail(p.id, true);
 }
 
 function openPlaceDetail(id, keepScroll = false) {
@@ -3135,7 +3234,7 @@ function openPlaceDetail(id, keepScroll = false) {
             }
             await store.del('places', id).catch(() => {});
             S.places.delete(id);
-            renderPlace({ id, poly: [] });
+            removePlaceLayer(id);
             openPlaces();
           }
         },
@@ -3151,14 +3250,20 @@ function openPlaceDetail(id, keepScroll = false) {
       h('div', { class: 'field' }, h('label', null, 'Nazwa'), nameIn),
       h('div', { class: 'field' }, h('label', null, 'Status'), statusSel),
       h('div', { class: 'field' }, h('label', null, 'Priorytet'), prioSel),
-      h('p', { class: 'hint' }, `Obszar: ${fmtHa(polyHa(p.poly))}, granica: ${p.poly.length} ${p.poly.length < 5 ? 'punkty' : 'punktów'}.`),
+      h('p', { class: 'hint' }, hasPoly(p) ? `Granica: ${fmtHa(polyHa(p.poly))} (${p.poly.length === 4 ? 'prostokąt z ekranu lub 4 punkty' : p.poly.length + ' punktów'}).` : 'Samo miejsce bez granicy. Granicę ustawisz jednym dotknięciem poniżej, kiedy na ekranie mieści się interesujący Cię teren.'),
       h('div', { class: 'field' }, h('label', null, 'Kontekst historyczny i notatki'), noteIn),
       h(
         'div',
         { class: 'row-actions' },
-        h('button', { type: 'button', class: 'btn primary', onClick: () => { closeSheet(); map.fitBounds(placeBounds(p), { padding: [30, 30] }); } }, icon('layers', 18), 'Pokaż na mapie'),
-        h('button', { type: 'button', class: 'btn', onClick: () => openOffline({ bounds: placeBounds(p), title: p.name, back: () => openPlaceDetail(id) }) }, icon('download', 18), 'Zapisz offline'),
-        h('button', { type: 'button', class: 'btn', onClick: () => startPlaceDraw(p) }, 'Narysuj granicę od nowa')
+        h('button', { type: 'button', class: 'btn primary', onClick: () => { closeSheet(); focusPlace(p); } }, icon('layers', 18), 'Pokaż na mapie'),
+        h('button', { type: 'button', class: 'btn', onClick: () => openOffline({ place: p, back: () => openPlaceDetail(id) }) }, icon('download', 18), 'Zapisz offline')
+      ),
+      h(
+        'div',
+        { class: 'row-actions' },
+        h('button', { type: 'button', class: 'btn', onClick: () => setScreenBorder(p) }, hasPoly(p) ? 'Granica = obecny ekran' : 'Użyj ekranu jako granicy'),
+        h('button', { type: 'button', class: 'btn', onClick: () => startPlaceDraw(p) }, 'Rysuj granicę ręcznie'),
+        hasPoly(p) && h('button', { type: 'button', class: 'btn', onClick: async () => { p.poly = []; await savePlace(p); renderPlace(p); openPlaceDetail(id, true); } }, 'Usuń granicę')
       ),
       h(
         'div',
@@ -3180,6 +3285,22 @@ function openPlaceDetail(id, keepScroll = false) {
     ],
     keepScroll
   );
+}
+
+
+/* ------------------------------------------------------------------ menu na mapie (przytrzymanie / prawy przycisk) */
+
+function showMapMenu(ll) {
+  if (S.picking || S.aligning || sheetOpen) return;
+  const close = () => map.closePopup();
+  const box = h(
+    'div',
+    { class: 'ctx' },
+    h('div', { class: 'hint' }, `${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)}`),
+    h('button', { type: 'button', class: 'btn primary', onClick: () => { close(); addPlaceAt(ll); } }, icon('pin', 18), 'Dodaj miejsce tutaj'),
+    h('button', { type: 'button', class: 'btn', onClick: () => { close(); openForm(null, { lat: ll.lat, lng: ll.lng, acc: null, src: 'pick' }); } }, icon('plus', 18), 'Dodaj znalezisko tutaj')
+  );
+  L.popup({ closeButton: false, className: 'ctx-popup', minWidth: 200 }).setLatLng(ll).setContent(box).openOn(map);
 }
 
 /* ------------------------------------------------------------------ dane testowe */
@@ -3305,6 +3426,7 @@ async function boot() {
   try {
     const [pins, tracks, outings, maps, places] = await Promise.all([store.getAll('pins'), store.getAll('tracks'), store.getAll('outings'), store.getAll('maps'), store.getAll('places')]);
     for (const q of places || []) {
+      normalizePlace(q);
       S.places.set(q.id, q);
       renderPlace(q);
     }

@@ -410,3 +410,7 @@ body.aligning .curtain { display: none; }
 }
 .fab { padding: 0 16px; font-size: 15px; gap: 6px; }
 .curtain-handle { top: 56%; }
+
+.ctx-popup .leaflet-popup-content { margin: 10px; }
+.ctx { display: grid; gap: 8px; }
+.ctx .hint { font: 12px var(--mono); }

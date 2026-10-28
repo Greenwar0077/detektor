@@ -9,7 +9,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.4.3';
+const VERSION = '0.4.4';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -216,7 +216,7 @@ map.on('contextmenu', (e) => {
 const NMT_DEF = CONFIG.base.find((d) => d.id === 'nmt-base');
 const compositeDefs = NMT_DEF
   ? CONFIG.base
-      .filter((b) => b.id !== 'nmt-base' && (b.type === 'xyz' || b.type === 'wms'))
+      .filter((b) => b.id !== 'nmt-base' && (b.type === 'xyz' || b.type === 'wms' || b.type === 'wmts2180'))
       .map((b) => ({
         ...NMT_DEF,
         id: b.id + '-nmt',
@@ -225,7 +225,9 @@ const compositeDefs = NMT_DEF
         under:
           b.type === 'xyz'
             ? { type: 'xyz', url: b.url }
-            : { type: 'wms', url: b.url, layers: b.layers, format: b.format },
+            : b.type === 'wmts2180'
+              ? { type: 'wmts2180', def: b }
+              : { type: 'wms', url: b.url, layers: b.layers, format: b.format },
         shadeAlpha: b.type === 'xyz' ? 0.7 : 0.8,
         attribution: [b.attribution, NMT_DEF.attribution].filter(Boolean).join(', ')
       }))
@@ -2610,6 +2612,18 @@ async function openMenu(keepScroll = false) {
           h('button', { type: 'button', class: 'btn', onClick: clearTiles }, 'Wyczyść kafelki')
         )
       ),
+      h(
+        'div',
+        { class: 'section' },
+        h('h3', null, 'Narzędzia testowe'),
+        h('p', { class: 'hint' }, 'Przykładowa wyprawa wokół środka mapy (trasa + 8 znalezisk) do sprawdzania listy, filtrów, eksportu i kopii. Oznaczona [TEST].'),
+        h(
+          'div',
+          { class: 'row-actions' },
+          h('button', { type: 'button', class: 'btn', onClick: addDemoOuting }, 'Dodaj przykładową wyprawę'),
+          h('button', { type: 'button', class: 'btn', onClick: removeDemoData }, 'Usuń dane testowe')
+        )
+      ),
       h('div', { class: 'section' }, h('h3', null, 'Diagnostyka warstw'), diag.length ? diag : h('p', { class: 'hint' }, 'Brak danych.')),
       h(
         'div',
@@ -2790,6 +2804,91 @@ async function clearTiles() {
   } catch (e) {
     toast('Nie udało się wyczyścić.', 3000);
   }
+  openMenu(true);
+}
+
+/* ------------------------------------------------------------------ dane testowe */
+
+// Przykładowa wyprawa do diagnozowania na czas testów: trasa i znaleziska wokół środka mapy.
+async function addDemoOuting() {
+  const c = map.getCenter();
+  const now = Date.now();
+  const start = now - 2 * 3600e3;
+  const o = { id: store.uid(), name: '[TEST] Przykładowa wyprawa', start, end: now - 10 * 60e3, open: false, track: true, note: 'Dane testowe, do usunięcia w Menu.', demo: true };
+  const mPerLat = 111320;
+  const mPerLng = 111320 * Math.cos((c.lat * Math.PI) / 180);
+  let x = 0;
+  let y = 0;
+  let dir = Math.random() * Math.PI * 2;
+  const pts = [];
+  let dist = 0;
+  for (let i = 0; i < 150; i++) {
+    dir += (Math.random() - 0.5) * 0.9;
+    const step = 7 + Math.random() * 6;
+    const nx = x + Math.cos(dir) * step;
+    const ny = y + Math.sin(dir) * step;
+    if (Math.hypot(nx, ny) > 450) dir += Math.PI * 0.8; // wracamy w stronę środka
+    else {
+      x = nx;
+      y = ny;
+    }
+    pts.push([c.lat + y / mPerLat, c.lng + x / mPerLng, start + i * 36e3, 3 + Math.round(Math.random() * 6)]);
+    if (i) dist += haversine(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+  }
+  const t = { id: store.uid(), outing: o.id, name: o.name, start, end: o.end, pts, dist, open: false, demo: true };
+  const samples = [
+    ['coin', 12, 'piasek', 'czysty, wysoki', 'Moneta, ok. 18 mm, awers nieczytelny.'],
+    ['coin', 8, 'ściółka leśna', 'wysoki', 'Półtorak? Do oczyszczenia i oceny.'],
+    ['ammo', 25, 'piasek', 'niski, ostry', 'Łuska karabinowa, kaliber ok. 7,92.'],
+    ['weapon', 30, 'glina', 'średni, szeroki', 'Fragment okucia, możliwy element broni.'],
+    ['uniform', 15, 'ściółka leśna', 'średni', 'Guzik mundurowy z orłem, bez nici.'],
+    ['tool', 20, 'ziemia orna', 'niski', 'Fragment podkowy.'],
+    ['jewel', 6, 'piasek', 'bardzo wysoki', 'Pierścionek z blaszki, bez próby.'],
+    ['other', null, 'inne', '', 'Sygnał bez wykopu, do sprawdzenia.']
+  ];
+  const pins = samples.map(([cat, depth, soil, signal, notes], k) => {
+    const q = pts[Math.floor(((k + 0.5) * pts.length) / samples.length)];
+    return {
+      id: store.uid(),
+      lat: q[0] + (Math.random() - 0.5) * 0.00004,
+      lng: q[1] + (Math.random() - 0.5) * 0.00006,
+      acc: 4,
+      src: 'gps',
+      ts: q[2] + 20e3,
+      cat,
+      depth,
+      soil,
+      signal,
+      notes,
+      hazard: cat === 'ammo',
+      photos: [],
+      outing: o.id,
+      demo: true,
+      updated: now
+    };
+  });
+  try {
+    await store.put('outings', o);
+    await store.put('tracks', t);
+    for (const p of pins) await store.put('pins', p);
+  } catch (e) {
+    toast('Nie udało się zapisać danych testowych.', 5000);
+    return;
+  }
+  S.outings.set(o.id, o);
+  S.tracks.set(t.id, t);
+  for (const p of pins) S.pins.set(p.id, p);
+  renderTrack(t);
+  for (const p of pins) renderPin(p);
+  map.fitBounds(L.latLngBounds(pts.map((q) => [q[0], q[1]])), { padding: [30, 30] });
+  closeSheet();
+  toast('Dodano przykładową wyprawę: trasa i 8 znalezisk.', 4000);
+}
+
+async function removeDemoData() {
+  const demo = [...S.outings.values()].filter((o) => o.demo);
+  for (const o of demo) await deleteOuting(o);
+  toast(demo.length ? 'Usunięto dane testowe.' : 'Brak danych testowych.');
   openMenu(true);
 }
 

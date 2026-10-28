@@ -189,6 +189,55 @@ const srcUrl = (def, li, row, col) =>
   `&style=default&format=${encodeURIComponent(def.format || 'image/jpeg')}` +
   `&TileMatrixSet=EPSG:2180&TileMatrix=EPSG:2180:${profileOf(def).levels[li].id}&TileRow=${row}&TileCol=${col}`;
 
+// Rysuje na płótnie kafelek mapy (z,tx,ty) złożony ze źródłowych kafelków PL-1992 usługi `def`.
+// Zwraca false, gdy nie udało się pobrać żadnego kafelka źródłowego.
+async function warpInto(def, canvas, z, tx, ty, r) {
+  const { li, n, dp, gp, c0, c1, r0, r1 } = plan(def, z, tx, ty);
+  if (c1 < c0 || r1 < r0) return true; // poza zasięgiem usługi: pusty kafelek, nie błąd
+  if ((c1 - c0 + 1) * (r1 - r0 + 1) > 16) return false;
+  const jobs = [];
+  for (let row = r0; row <= r1; row++) {
+    for (let col = c0; col <= c1; col++) {
+      jobs.push(loadImage(srcUrl(def, li, row, col)).then((img) => ({ img, col, row })));
+    }
+  }
+  const got = (await Promise.all(jobs)).filter((t) => t.img);
+  if (!got.length) return false;
+  const ctx = canvas.getContext('2d');
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const tris = [
+        [[i, j], [i + 1, j], [i, j + 1]],
+        [[i + 1, j], [i + 1, j + 1], [i, j + 1]]
+      ];
+      for (const t of tris) {
+        const d = t.map(([a, b]) => dp[b][a]);
+        const g = t.map(([a, b]) => gp[b][a]);
+        const m = affine(d, g);
+        if (!m) continue;
+        const clip = expand(d, 1.2);
+        for (const { img, col, row } of got) {
+          ctx.save();
+          ctx.setTransform(r, 0, 0, r, 0, 0);
+          ctx.beginPath();
+          ctx.moveTo(clip[0].x, clip[0].y);
+          ctx.lineTo(clip[1].x, clip[1].y);
+          ctx.lineTo(clip[2].x, clip[2].y);
+          ctx.closePath();
+          ctx.clip();
+          const [a, b, c, dd, e, f] = m;
+          const ox = col * SRC;
+          const oy = row * SRC;
+          ctx.setTransform(r * a, r * b, r * c, r * dd, r * (e + a * ox + c * oy), r * (f + b * ox + dd * oy));
+          ctx.drawImage(img, -0.5, -0.5, SRC + 1, SRC + 1); // lekki zakład: bez szwów między kafelkami
+          ctx.restore();
+        }
+      }
+    }
+  }
+  return true;
+}
+
 export function createWmts2180Layer(def, options) {
   const Layer = L.GridLayer.extend({
     createTile(coords, done) {
@@ -205,74 +254,27 @@ export function createWmts2180Layer(def, options) {
 
     async _draw(tile, coords, r) {
       const { x: tx, y: ty, z } = coords;
-      const { li, n, dp, gp, c0, c1, r0, r1 } = plan(def, z, tx, ty);
-      if (c1 < c0 || r1 < r0) return true; // poza zasięgiem usługi: pusty kafelek, nie błąd
-      if ((c1 - c0 + 1) * (r1 - r0 + 1) > 16) return false;
-
-      const jobs = [];
-      for (let row = r0; row <= r1; row++) {
-        for (let col = c0; col <= c1; col++) {
-          const url = srcUrl(def, li, row, col);
-          jobs.push(loadImage(url).then((img) => ({ img, col, row })));
-        }
-      }
-      const loaded = await Promise.all(jobs);
-      const got = loaded.filter((t) => t.img);
-      if (!got.length) return false;
-
+      if (!def.under) return warpInto(def, tile, z, tx, ty, r);
       // Z tłem: cieniowanie rysujemy na osobnym płótnie i mnożymy z tłem raz, na końcu
       // (to działa w każdej przeglądarce, nie wymaga mix-blend-mode).
-      const mix = !!def.under;
+      const shade = document.createElement('canvas');
+      shade.width = tile.width;
+      shade.height = tile.height;
       let underImg = null;
-      const shade = mix ? document.createElement('canvas') : tile;
-      if (mix) {
-        shade.width = tile.width;
-        shade.height = tile.height;
-        underImg = await loadImage(underUrl(def.under, z, tx, ty, tile.width));
+      const under = def.under;
+      const jobs = [warpInto(def, shade, z, tx, ty, r)];
+      if (under.type === 'wmts2180') {
+        underImg = document.createElement('canvas');
+        underImg.width = tile.width;
+        underImg.height = tile.height;
+        jobs.push(warpInto(under.def, underImg, z, tx, ty, r));
+      } else {
+        jobs.push(loadImage(underUrl(under, z, tx, ty, tile.width)).then((img) => (underImg = img)));
       }
-      const ctx = shade.getContext('2d');
-      for (let j = 0; j < n; j++) {
-        for (let i = 0; i < n; i++) {
-          const tris = [
-            [[i, j], [i + 1, j], [i, j + 1]],
-            [[i + 1, j], [i + 1, j + 1], [i, j + 1]]
-          ];
-          for (const t of tris) {
-            const d = t.map(([a, b]) => dp[b][a]);
-            const g = t.map(([a, b]) => gp[b][a]);
-            const m = affine(d, g);
-            if (!m) continue;
-            const clip = expand(d, 1.2);
-            for (const { img, col, row } of got) {
-              ctx.save();
-              ctx.setTransform(r, 0, 0, r, 0, 0);
-              ctx.beginPath();
-              ctx.moveTo(clip[0].x, clip[0].y);
-              ctx.lineTo(clip[1].x, clip[1].y);
-              ctx.lineTo(clip[2].x, clip[2].y);
-              ctx.closePath();
-              ctx.clip();
-              const [a, b, c, dd, e, f] = m;
-              const ox = col * SRC;
-              const oy = row * SRC;
-              ctx.setTransform(
-                r * a,
-                r * b,
-                r * c,
-                r * dd,
-                r * (e + a * ox + c * oy),
-                r * (f + b * ox + dd * oy)
-              );
-              ctx.drawImage(img, -0.5, -0.5, SRC + 1, SRC + 1); // lekki zakład: bez szwów między kafelkami
-              ctx.restore();
-            }
-          }
-        }
-      }
-      if (mix) {
-        tile._mix = { underImg, shade };
-        compose(tile, this.options.shadeAlpha ?? 0.5);
-      }
+      const [okShade] = await Promise.all(jobs);
+      if (!okShade) return false;
+      tile._mix = { underImg, shade };
+      compose(tile, this.options.shadeAlpha ?? 0.5);
       return true;
     },
 
@@ -283,7 +285,12 @@ export function createWmts2180Layer(def, options) {
       if (c1 >= c0 && r1 >= r0 && (c1 - c0 + 1) * (r1 - r0 + 1) <= 16) {
         for (let row = r0; row <= r1; row++) for (let col = c0; col <= c1; col++) out.push(srcUrl(def, li, row, col));
       }
-      if (def.under) {
+      if (def.under && def.under.type === 'wmts2180') {
+        const u = plan(def.under.def, coords.z, coords.x, coords.y);
+        if (u.c1 >= u.c0 && u.r1 >= u.r0 && (u.c1 - u.c0 + 1) * (u.r1 - u.r0 + 1) <= 16) {
+          for (let row = u.r0; row <= u.r1; row++) for (let col = u.c0; col <= u.c1; col++) out.push(srcUrl(def.under.def, u.li, row, col));
+        }
+      } else if (def.under) {
         const r = (window.devicePixelRatio || 1) >= 1.5 ? 2 : 1;
         out.push(underUrl(def.under, coords.z, coords.x, coords.y, 256 * r));
       }

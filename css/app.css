@@ -369,3 +369,34 @@ a.btn:visited { color: var(--ink); }
 
 .bar-btn > span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .fab { padding: 0 18px; }
+
+/* ---------- kurtyna porównawcza ---------- */
+.curtain { position: absolute; z-index: 950; top: 0; bottom: 0; width: 0; pointer-events: none; }
+.curtain::before { content: ''; position: absolute; top: 0; bottom: 0; left: -1.5px; width: 3px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55); }
+.curtain-handle {
+  position: absolute; top: 42%; left: -28px; width: 56px; height: 44px; border-radius: 22px;
+  background: var(--surface); border: 2px solid var(--accent); box-shadow: var(--shadow);
+  display: grid; place-items: center; font-size: 12px; color: var(--accent);
+  pointer-events: auto; touch-action: none; cursor: ew-resize;
+}
+body.picking .curtain, body.sheet-open .curtain { display: none; }
+#btn-curtain span { font-size: 20px; }
+#btn-hist span { font-size: 11px; }
+
+
+/* ---------- skan jako warstwa i dopasowanie ---------- */
+.scan-img { position: absolute; left: 0; top: 0; max-width: none !important; max-height: none !important; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+.aligner {
+  position: absolute; z-index: 1000; left: 0; right: 0; bottom: 0;
+  padding: 12px var(--gutter-r) calc(env(safe-area-inset-bottom, 0px) + 14px) var(--gutter-l);
+  background: color-mix(in srgb, var(--surface) 95%, transparent); border-top: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.aligner h3 { margin: 0; font-size: 15px; }
+.aligner p { margin: 0; font-size: 13px; color: var(--muted); }
+.aligner .row { display: flex; gap: 8px; }
+.aligner .row .btn { flex: 1; }
+.aligner .op { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.aligner .op input { flex: 1; accent-color: var(--accent); min-height: 28px; }
+body.aligning .leaflet-bottom { bottom: 200px; }
+body.aligning .curtain { display: none; }

@@ -2,11 +2,12 @@
 import { CONFIG } from '../config.js';
 import * as store from './store.js';
 import { createWmts2180Layer } from './wmts2180.js';
+import { ScanLayer, fitTransform, applyT, applyInv, SM } from './scanlayer.js';
 import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -107,6 +108,11 @@ function toast(msg, ms = 2800) {
   }, ms);
 }
 
+function hideToast() {
+  clearTimeout(toastTimer);
+  $('#toast').hidden = true;
+}
+
 async function copyText(text, okMsg = 'Skopiowano.') {
   try {
     await navigator.clipboard.writeText(text);
@@ -132,6 +138,8 @@ const S = {
   pins: new Map(),
   tracks: new Map(),
   outings: new Map(),
+  maps: new Map(), // mapy ze skanów (IndexedDB)
+  aligning: null,
   outing: null, // aktywne wyjście
   filter: null, // id wyjścia pokazywanego na mapie (null = wszystko)
   markers: new Map(),
@@ -156,9 +164,14 @@ const S = {
 $('#btn-locate').append(icon('locate'));
 $('#btn-layers').append(icon('layers'));
 // Szybkie przełączniki na mapie: cieniowanie LiDAR i nazwy ulic
-for (const [id, label, text] of [['btn-nmt', 'Cieniowanie LiDAR: włącz lub wyłącz', 'LiDAR']]) {
+const quickDefs = [['btn-nmt', 'Cieniowanie LiDAR: włącz lub wyłącz', 'LiDAR']];
+quickDefs.push(['btn-hist', 'Mapa historyczna: włącz lub wyłącz', 'Retro']);
+quickDefs.push(['btn-curtain', 'Porównaj ze współczesną mapą (kurtyna)', '⇔']);
+let quickAfter = $('#btn-layers');
+for (const [id, label, text] of quickDefs) {
   const b = h('button', { id, class: 'round quick', type: 'button', 'aria-label': label }, h('span', null, text));
-  $('#btn-layers').after(b);
+  quickAfter.after(b);
+  quickAfter = b;
 }
 $('#btn-menu').append(icon('menu'));
 $('#sheet-close').append(icon('close'));
@@ -192,7 +205,7 @@ map.on('dragstart', () => {
 });
 // Długie przytrzymanie mapy: dodaj znalezisko w tym miejscu.
 map.on('contextmenu', (e) => {
-  if (S.picking) return;
+  if (S.picking || S.aligning) return;
   openForm(null, { lat: e.latlng.lat, lng: e.latlng.lng, acc: null, src: 'pick' });
 });
 
@@ -231,6 +244,9 @@ const layerState = (() => {
     nmtAlpha: Number.isFinite(s.nmtAlpha) ? Math.min(1, Math.max(0.1, s.nmtAlpha)) : 0.8,
     names: !!s.names,
     hist: s.hist && typeof s.hist === 'object' ? s.hist : {},
+    histLast: typeof s.histLast === 'string' ? s.histLast : null,
+    curtain: !!s.curtain,
+    curtainX: Number.isFinite(s.curtainX) ? Math.min(0.9, Math.max(0.1, s.curtainX)) : 0.5,
     opacity: s.opacity && typeof s.opacity === 'object' ? s.opacity : {}
   };
   if (st.base !== 'nmt-base') st.last = st.base;
@@ -247,7 +263,7 @@ function makeLayer(def) {
     attribution: def.attribution,
     maxZoom: def.maxZoom || CONFIG.maxZoom || 20,
     opacity: layerState.opacity[def.id] ?? def.opacity ?? 1,
-    zIndex: def.kind === 'base' ? 1 : def.kind === 'overlay' ? 10 : 20
+    zIndex: def.kind === 'base' ? 1 : def.kind === 'hist' ? 5 : 10
   };
   if (def.maxNativeZoom) o.maxNativeZoom = def.maxNativeZoom;
   if (def.minZoom) o.minZoom = def.minZoom;
@@ -266,20 +282,23 @@ function makeLayer(def) {
     // Część usług Geoportalu (np. NMT) nie zna EPSG:3857: pytamy je w EPSG:4326.
     if (def.crs === '4326') w.crs = L.CRS.EPSG4326;
     layer = L.tileLayer.wms(def.url, w);
+  } else if (def.type === 'scan') {
+    const r = def.rec;
+    layer = new ScanLayer(URL.createObjectURL(r.blob), mapTransform(r), r.w, r.h, o);
   } else if (def.type === 'image') {
     layer = L.imageOverlay(def.url, def.bounds, o);
   } else {
     layer = L.tileLayer(def.url, { ...o, tms: !!def.tms, bounds: def.bounds });
   }
   S.diag[def.id] = { ok: 0, err: 0 };
-  if (def.type !== 'image') {
+  if (def.type !== 'image' && def.type !== 'scan') {
     layer.on('tileload', () => {
       S.diag[def.id].ok++;
     });
     layer.on('tileerror', () => {
       const d = S.diag[def.id];
       d.err++;
-      if (d.ok === 0 && d.err >= 4 && navigator.onLine !== false && !S.warned.has(def.id)) {
+      if (def.kind !== 'hist' && d.ok === 0 && d.err >= 4 && navigator.onLine !== false && !S.warned.has(def.id)) {
         S.warned.add(def.id);
         toast(`Warstwa „${def.name}” się nie ładuje. Sprawdź internet albo adres usługi (Dane → Diagnostyka).`, 6000);
       }
@@ -311,6 +330,7 @@ function applyLayers() {
   }
   LS.set('layers', layerState);
   updateQuick();
+  updateCurtain();
 }
 
 /* ------------------------------------------------------------------ znaczniki i ślady na mapie */
@@ -763,6 +783,10 @@ $('#viewer').addEventListener('click', (e) => {
 window.addEventListener('popstate', () => {
   if (cam) {
     closeCamera();
+    return;
+  }
+  if (S.aligning) {
+    endAlign();
     return;
   }
   if (S.picking) {
@@ -1838,7 +1862,10 @@ function histRow(def) {
     'div',
     { class: 'layer-row' },
     h('div', { class: 'top' }, h('strong', null, def.name), toggle),
-    on && h('label', { class: 'hint' }, 'Przezroczystość', slider)
+    [def.year, def.scale, def.accuracy && `dokładność ${def.accuracy}`].filter(Boolean).length > 0 &&
+      h('div', { class: 'hint' }, [def.year, def.scale, def.accuracy && `dokładność ${def.accuracy}`].filter(Boolean).join(' · ')),
+    on && h('label', { class: 'hint' }, 'Przezroczystość', slider),
+    def.type === 'scan' && scanActions(def)
   );
 }
 
@@ -1877,6 +1904,404 @@ function updateQuick() {
     t.classList.toggle('active', layerState.names);
     t.setAttribute('aria-pressed', String(layerState.names));
   }
+  const hb = $('#btn-hist');
+  if (hb) {
+    hb.hidden = !histDefs().length;
+    const on = anyHist();
+    hb.classList.toggle('active', on);
+    hb.setAttribute('aria-pressed', String(on));
+    const cb = $('#btn-curtain');
+    cb.hidden = !on || !histDefs().length;
+    cb.classList.toggle('active', layerState.curtain);
+    cb.setAttribute('aria-pressed', String(layerState.curtain));
+  }
+}
+
+/* ------------------------------------------------------------------ mapy historyczne i kurtyna */
+
+const histDefs = () => ALL_DEFS.filter((d) => d.kind === 'hist');
+const anyHist = () => histDefs().some((d) => layerState.hist[d.id]);
+
+function toggleHist() {
+  const defs = histDefs();
+  if (!defs.length) return;
+  if (anyHist()) {
+    const on = defs.find((d) => layerState.hist[d.id]);
+    if (on) layerState.histLast = on.id;
+    for (const d of defs) layerState.hist[d.id] = false;
+  } else {
+    const id = defs.some((d) => d.id === layerState.histLast) ? layerState.histLast : defs[0].id;
+    layerState.hist[id] = true;
+  }
+  applyLayers();
+}
+
+function toggleCurtain() {
+  layerState.curtain = !layerState.curtain;
+  applyLayers();
+}
+
+// Kurtyna: stara mapa widoczna tylko po lewej stronie pionowej linii, po prawej jest dzisiejsza mapa.
+const curtainEl = $('#curtain');
+function curtainPx() {
+  return Math.round(map.getSize().x * layerState.curtainX);
+}
+function clipHist() {
+  const nw = map.containerPointToLayerPoint([0, 0]);
+  const se = map.containerPointToLayerPoint(map.getSize());
+  const on = layerState.curtain && anyHist();
+  const x = nw.x + curtainPx();
+  for (const d of histDefs()) {
+    const l = layerObjs.get(d.id);
+    const c = l && l.getContainer && l.getContainer();
+    if (c) c.style.clip = on ? `rect(${nw.y}px, ${x}px, ${se.y}px, ${nw.x}px)` : '';
+  }
+}
+function updateCurtain() {
+  const on = layerState.curtain && anyHist();
+  curtainEl.hidden = !on;
+  if (on) curtainEl.style.left = curtainPx() + 'px';
+  clipHist();
+}
+map.on('move zoom resize layeradd', () => {
+  if (layerState.curtain) {
+    updateCurtain();
+  }
+});
+{
+  const handle = curtainEl.querySelector('.curtain-handle');
+  let drag = false;
+  const moveTo = (clientX) => {
+    const r = $('#map').getBoundingClientRect();
+    layerState.curtainX = Math.min(0.9, Math.max(0.1, (clientX - r.left) / r.width));
+    curtainEl.style.left = curtainPx() + 'px';
+    clipHist();
+  };
+  handle.addEventListener('pointerdown', (e) => {
+    drag = true;
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (drag) moveTo(e.clientX);
+  });
+  const end = () => {
+    if (!drag) return;
+    drag = false;
+    LS.set('layers', layerState);
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+}
+
+
+/* ------------------------------------------------------------------ własne mapy ze skanów */
+
+const mapTransform = (r) => fitTransform(r.init, r.pts);
+
+function userMapDefs() {
+  return [...S.maps.values()].map((r) => ({
+    id: 'map:' + r.id,
+    name: r.name,
+    kind: 'hist',
+    type: 'scan',
+    rec: r,
+    opacity: 0.8,
+    accuracy: r.pts.length ? `dopasowano na ${r.pts.length} pkt` : 'niedopasowana'
+  }));
+}
+
+function syncMapDefs() {
+  const keep = ALL_DEFS.filter((d) => d.type !== 'scan');
+  ALL_DEFS.length = 0;
+  ALL_DEFS.push(...keep, ...userMapDefs());
+  for (const [id, l] of [...layerObjs]) {
+    if (id.startsWith('map:') && !S.maps.has(id.slice(4))) {
+      if (map.hasLayer(l)) map.removeLayer(l);
+      if (l._url) URL.revokeObjectURL(l._url);
+      layerObjs.delete(id);
+      delete layerState.hist[id];
+    }
+  }
+}
+
+async function importScan(file) {
+  toast('Wczytuję skan…', 10000);
+  let bmp;
+  try {
+    bmp = await createImageBitmap(file);
+  } catch (e) {
+    toast('Nie udało się otworzyć obrazu. Użyj JPG lub PNG; bardzo duży skan zmniejsz najpierw na komputerze.', 8000);
+    return;
+  }
+  const k = Math.min(1, 4800 / Math.max(bmp.width, bmp.height));
+  const w = Math.round(bmp.width * k);
+  const hh = Math.round(bmp.height * k);
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = hh;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bmp, 0, 0, w, hh);
+  if (bmp.close) bmp.close();
+  const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.88));
+  if (!blob) {
+    toast('Nie udało się przetworzyć skanu.', 5000);
+    return;
+  }
+  // wstępne ustawienie: skan na środku widoku, ok. 80% ekranu, bez obrotu
+  const size = map.getSize();
+  const mpp = 156543.03392804097 / Math.pow(2, map.getZoom());
+  const s = Math.min((0.8 * size.x * mpp) / w, (0.8 * size.y * mpp) / hh);
+  const cm = SM.project(map.getCenter());
+  const rec = {
+    id: store.uid(),
+    name: file.name.replace(/\.[^.]+$/, '').slice(0, 80) || 'Mapa',
+    blob,
+    w,
+    h: hh,
+    init: { a: s, b: 0, c: 0, d: -s, e: cm.x - (s * w) / 2, f: cm.y + (s * hh) / 2 },
+    pts: [],
+    created: Date.now()
+  };
+  S.maps.set(rec.id, rec);
+  syncMapDefs();
+  hideToast();
+  startAlign(rec, true);
+}
+
+function scanActions(def) {
+  const r = def.rec;
+  const wrap = h('div', { class: 'row-actions' });
+  const nameIn = h('input', {
+    type: 'text',
+    maxlength: '80',
+    value: r.name,
+    'aria-label': 'Nazwa mapy',
+    onChange: (e) => {
+      r.name = e.target.value.trim() || r.name;
+      e.target.value = r.name;
+      def.name = r.name;
+      store.put('maps', r).catch(() => toast('Nie udało się zapisać.', 4000));
+      openLayers(true);
+    }
+  });
+  const show = () =>
+    wrap.replaceChildren(
+      h('button', { type: 'button', class: 'btn', onClick: () => startAlign(r, false) }, 'Dopasuj ponownie'),
+      h('button', { type: 'button', class: 'btn danger', onClick: ask }, icon('trash', 18), 'Usuń')
+    );
+  const ask = () =>
+    wrap.replaceChildren(
+      h('p', { class: 'hint' }, 'Usunąć tę mapę z telefonu? Oryginalny plik zostaje u Ciebie.'),
+      h('button', { type: 'button', class: 'btn', onClick: show }, 'Anuluj'),
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'btn danger',
+          onClick: async () => {
+            await store.del('maps', r.id).catch(() => {});
+            S.maps.delete(r.id);
+            syncMapDefs();
+            applyLayers();
+            openLayers(true);
+          }
+        },
+        'Tak, usuń'
+      )
+    );
+  show();
+  return h('div', null, h('div', { class: 'field' }, nameIn), wrap);
+}
+
+/* Dopasowanie skanu do terenu: celownik na punkcie skanu, potem celownik na tym samym punkcie terenu. */
+
+function startAlign(rec, isNew) {
+  const id = 'map:' + rec.id;
+  layerState.hist[id] = true;
+  const al = {
+    rec,
+    id,
+    isNew,
+    origPts: rec.pts.map((p) => ({ ...p })),
+    pts: rec.pts.map((p) => ({ ...p })),
+    step: rec.pts.length ? 'idle' : 'A',
+    pending: null,
+    marker: null,
+    op: null,
+    curtainWas: layerState.curtain,
+    saved: false
+  };
+  layerState.curtain = false;
+  S.aligning = al;
+  applyLayers();
+  al.layer = layerObjs.get(id);
+  document.body.classList.add('picking', 'aligning');
+  $('#crosshair').hidden = false;
+  $('#aligner').hidden = false;
+  sheetEl.hidden = true;
+  backdrop.hidden = true;
+  history.pushState({ align: 1 }, '');
+  if (!isNew) {
+    const T = mapTransform(rec);
+    const pts = [[0, 0], [rec.w, 0], [0, rec.h], [rec.w, rec.h]].map(([x, y]) => {
+      const [X, Y] = applyT(T, x, y);
+      return SM.unproject(L.point(X, Y));
+    });
+    map.fitBounds(L.latLngBounds(pts), { padding: [20, 20] });
+  }
+  renderAligner();
+}
+
+const STEP_OP = { A: 0.9, B: 0.5, idle: 0.65 };
+
+function renderAligner() {
+  const al = S.aligning;
+  if (!al) return;
+  const n = al.pts.length;
+  al.layer.setOpacity(al.op ?? STEP_OP[al.step]);
+  let title;
+  let text;
+  let buttons;
+  const cancel = h('button', { type: 'button', class: 'btn', onClick: () => history.back() }, 'Anuluj');
+  if (al.step === 'A') {
+    title = `Punkt ${n + 1}: wskaż na skanie`;
+    text = 'Przesuwaj i przybliżaj mapę, aż celownik stanie na rozpoznawalnym miejscu skanu (skrzyżowanie, kościół, most). Potem „Dalej”.';
+    buttons = [cancel, h('button', { type: 'button', class: 'btn primary', onClick: alignNext }, 'Dalej')];
+  } else if (al.step === 'B') {
+    title = `Punkt ${n + 1}: to samo miejsce w terenie`;
+    text = 'Czerwona kropka to wybrane miejsce na skanie. Przesuń mapę tak, żeby celownik stał na TYM SAMYM miejscu na prawdziwej mapie, i dotknij „Przypnij”.';
+    buttons = [
+      h('button', { type: 'button', class: 'btn', onClick: alignBack }, 'Wstecz'),
+      h('button', { type: 'button', class: 'btn primary', onClick: alignPin }, 'Przypnij tutaj')
+    ];
+  } else {
+    title = `Dopasowanie: ${n} ${n === 1 ? 'punkt' : n < 5 ? 'punkty' : 'punktów'}`;
+    text =
+      n === 1
+        ? 'Dodaj drugi punkt daleko od pierwszego: ustawi skalę i obrót.'
+        : n === 2
+          ? 'Dobrze. Trzeci punkt (z dala od prostej między tamtymi) poprawi przekrzywienie arkusza.'
+          : 'Gdy skan pasuje do terenu, dotknij „Gotowe”. Kolejne punkty poprawiają dopasowanie.';
+    buttons = [
+      cancel,
+      h('button', { type: 'button', class: 'btn', onClick: alignUndo, disabled: !n }, 'Cofnij punkt'),
+      h('button', { type: 'button', class: 'btn', onClick: () => { al.step = 'A'; renderAligner(); } }, '+ Punkt'),
+      h('button', { type: 'button', class: 'btn primary', onClick: alignDone }, 'Gotowe')
+    ];
+  }
+  const slider = h('input', {
+    type: 'range',
+    min: '0.1',
+    max: '1',
+    step: '0.05',
+    'aria-label': 'Przezroczystość skanu',
+    props: { value: String(al.op ?? STEP_OP[al.step]) },
+    onInput: (e) => {
+      al.op = Number(e.target.value);
+      al.layer.setOpacity(al.op);
+    }
+  });
+  $('#aligner').replaceChildren(
+    h('h3', null, title),
+    h('p', null, text),
+    h('div', { class: 'op' }, h('span', null, 'Przezroczystość skanu'), slider),
+    h('div', { class: 'row' }, buttons)
+  );
+}
+
+function alignNext() {
+  const al = S.aligning;
+  const c = map.getCenter();
+  const m = SM.project(c);
+  const T = mapTransform(al.rec);
+  const [px, py] = applyInv(T, m.x, m.y);
+  if (!(px >= 0 && py >= 0 && px <= al.rec.w && py <= al.rec.h)) {
+    toast('Celownik jest poza skanem. Przesuń mapę na skan.', 3500);
+    return;
+  }
+  al.pending = { px, py, ll: c };
+  al.marker = L.circleMarker(c, { radius: 8, color: '#fff', weight: 3, fillColor: '#d6402a', fillOpacity: 1, interactive: false }).addTo(map);
+  al.step = 'B';
+  renderAligner();
+}
+
+function alignBack() {
+  const al = S.aligning;
+  if (al.marker) map.removeLayer(al.marker);
+  al.marker = null;
+  al.pending = null;
+  al.step = 'A';
+  renderAligner();
+}
+
+function alignPin() {
+  const al = S.aligning;
+  const m = SM.project(map.getCenter());
+  al.pts.push({ px: al.pending.px, py: al.pending.py, X: m.x, Y: m.y });
+  if (al.marker) map.removeLayer(al.marker);
+  al.marker = null;
+  al.pending = null;
+  al.rec.pts = al.pts;
+  al.layer.setTransform(mapTransform(al.rec));
+  al.step = 'idle';
+  renderAligner();
+}
+
+function alignUndo() {
+  const al = S.aligning;
+  al.pts.pop();
+  al.rec.pts = al.pts;
+  al.layer.setTransform(mapTransform(al.rec));
+  al.step = al.pts.length ? 'idle' : 'A';
+  renderAligner();
+}
+
+async function alignDone() {
+  const al = S.aligning;
+  if (!al.pts.length) {
+    toast('Dodaj przynajmniej jeden punkt.', 3000);
+    return;
+  }
+  al.rec.pts = al.pts;
+  try {
+    await store.put('maps', al.rec);
+  } catch (e) {
+    toast('Nie udało się zapisać mapy (za mało miejsca?).', 6000);
+    return;
+  }
+  al.saved = true;
+  history.back();
+}
+
+function endAlign() {
+  const al = S.aligning;
+  if (!al) return;
+  S.aligning = null;
+  document.body.classList.remove('picking', 'aligning');
+  $('#crosshair').hidden = true;
+  $('#aligner').hidden = true;
+  if (al.marker) map.removeLayer(al.marker);
+  layerState.curtain = al.curtainWas;
+  if (al.saved) {
+    layerState.opacity[al.id] = al.op ?? 0.7;
+    layerState.hist[al.id] = true;
+    al.layer.setOpacity(layerState.opacity[al.id]);
+    syncMapDefs();
+    toast('Mapa zapisana.');
+  } else if (al.isNew) {
+    S.maps.delete(al.rec.id);
+    syncMapDefs();
+  } else {
+    al.rec.pts = al.origPts;
+    al.layer.setTransform(mapTransform(al.rec));
+    al.layer.setOpacity(layerState.opacity[al.id] ?? 0.8);
+  }
+  sheetEl.hidden = false;
+  backdrop.hidden = false;
+  applyLayers();
+  openLayers(true);
 }
 
 function switchLine(label, hint, on, disabled, onClick) {
@@ -1907,7 +2332,18 @@ function openLayers(keepScroll = false) {
     )
   );
   const lidarOnly = layerState.base === 'nmt-base';
-  const hist = (CONFIG.historical || []).map(histRow);
+  const scanInput = h('input', {
+    type: 'file',
+    accept: 'image/*',
+    hidden: true,
+    onChange: (e) => {
+      const f = e.target.files[0];
+      e.target.value = '';
+      if (f) importScan(f);
+    }
+  });
+  const hist = histDefs().map(histRow);
+  const histCurtain = hist.length ? switchLine('Kurtyna: porównaj z dzisiejszą mapą', 'Przesuwasz pionową linię: po lewej mapa historyczna, po prawej dzisiejsza.', layerState.curtain, !anyHist(), () => { toggleCurtain(); openLayers(true); }) : null;
   openSheet(
     'Warstwy mapy',
     [
@@ -1953,7 +2389,7 @@ function openLayers(keepScroll = false) {
           openLayers(true);
         })
       ),
-      hist.length && h('div', { class: 'section' }, h('h3', null, 'Mapy historyczne'), hist)
+      h('div', { class: 'section' }, h('h3', null, 'Mapy historyczne'), hist, hist.length ? histCurtain : h('p', { class: 'hint' }, 'Dodaj skan starej mapy (np. z Mapstera) i dopasuj go do terenu dwoma–trzema punktami.'), h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn primary', onClick: () => scanInput.click() }, icon('plus', 18), 'Dodaj mapę ze skanu'), scanInput))
     ],
     keepScroll
   );
@@ -2177,6 +2613,8 @@ $('#btn-rec').addEventListener('click', togglePause);
 $('#filter-clear').addEventListener('click', () => applyFilter(null));
 $('#btn-layers').addEventListener('click', () => openLayers());
 $('#btn-nmt').addEventListener('click', toggleNmt);
+$('#btn-hist').addEventListener('click', toggleHist);
+$('#btn-curtain').addEventListener('click', toggleCurtain);
 $('#btn-menu').addEventListener('click', () => openMenu());
 $('#btn-locate').addEventListener('click', onLocate);
 $('#gps-chip').addEventListener('click', onChip);
@@ -2189,7 +2627,10 @@ async function boot() {
   updateBar();
   updateLocateBtn();
   try {
-    const [pins, tracks, outings] = await Promise.all([store.getAll('pins'), store.getAll('tracks'), store.getAll('outings')]);
+    const [pins, tracks, outings, maps] = await Promise.all([store.getAll('pins'), store.getAll('tracks'), store.getAll('outings'), store.getAll('maps')]);
+    for (const r of maps || []) S.maps.set(r.id, r);
+    syncMapDefs();
+    applyLayers();
     for (const o of outings || []) S.outings.set(o.id, o);
     for (const p of pins || []) S.pins.set(p.id, p);
 

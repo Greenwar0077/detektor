@@ -1,4 +1,4 @@
-# Detektor 0.2.0
+# Detektor 0.3.0
 
 Mapa + GPS + dziennik znalezisk dla poszukiwacza. Aplikacja webowa (PWA), instaluje się na Androidzie z Chrome. Dane zostają w telefonie.
 
@@ -26,7 +26,7 @@ Wymagany jest https, GitHub Pages go zapewnia. Z `file://` lub zwykłego http GP
 
 ## Aktualizacja
 
-Wgraj zmienione pliki do repozytorium (Add file → Upload files, nadpisz). Przy zmianie plików zmień też numer w `CACHE` w `sw.js` (obecnie `detektor-v8`)., inaczej telefon może jeszcze przez chwilę pokazywać starą wersję.
+Wgraj zmienione pliki do repozytorium (Add file → Upload files, nadpisz). Przy zmianie plików zmień też numer w `CACHE` w `sw.js` (obecnie `detektor-v10`)., inaczej telefon może jeszcze przez chwilę pokazywać starą wersję.
 
 ## Ważne
 
@@ -35,20 +35,23 @@ Wgraj zmienione pliki do repozytorium (Add file → Upload files, nadpisz). Przy
 - Mapy wymagają internetu. Tryb offline (zapisywanie kafelków na wyjazd) to kolejny etap.
 - Nazwy warstw Geoportalu (`Raster`) i dostępność usług nie były sprawdzone z poziomu serwera testowego. Jeśli warstwa nie ładuje się, aplikacja pokaże komunikat, a w Menu → Diagnostyka warstw zobaczysz licznik błędów. Wtedy wyślij mi zrzut ekranu.
 
-## Dodawanie mapy historycznej (np. WIG Goniądz 1930)
+## Mapy historyczne ze skanu (np. WIG z Mapstera)
 
-1. Pobierz arkusz (np. z mapywig.org) jako obraz.
-2. W QGIS: **Georeferencer**, wskaż 8–12 punktów kontrolnych (skrzyżowania, kościoły, mosty), transformacja Thin Plate Spline albo wielomianowa 2, układ EPSG:3857.
-3. Wygeneruj kafelki: **Processing → Raster tools → Generate XYZ tiles (Directory)**, PNG, zoom 10–17, ze stałym tłem przezroczystym.
-4. Skopiuj folder kafelków do `tiles/wig-goniadz-1930/` w repozytorium. Pamiętaj o limicie GitHub (ok. 1 GB na repozytorium, zalecane mniej); większe zbiory kafelków trzeba hostować gdzie indziej.
-5. W `config.js` odkomentuj wpis w `historical` i dopasuj nazwę. Aplikacja pokaże warstwę w oknie Warstwy z suwakiem przezroczystości.
+1. Pobierz skan arkusza (JPG lub PNG) na telefon.
+2. Warstwy → Mapy historyczne → **Dodaj mapę ze skanu**. Skan zostanie zmniejszony do ok. 4800 px i zapisany w telefonie.
+3. **Dopasowanie na punktach:** przesuń mapę, aż celownik stanie na rozpoznawalnym miejscu skanu (skrzyżowanie, kościół, most) → „Dalej” → przesuń mapę na to samo miejsce w terenie (ortofotomapa) → „Przypnij”. Pierwszy punkt przesuwa skan, drugi (daleko od pierwszego) ustawia skalę i obrót, trzeci poprawia przekrzywienie. Suwak reguluje przezroczystość skanu.
+4. „Gotowe” zapisuje mapę. Potem: przycisk **Retro** włącza/wyłącza mapę, **⇔** uruchamia kurtynę (po lewej stara mapa, po prawej dzisiejsza), w Warstwach jest suwak przezroczystości, „Dopasuj ponownie” i „Usuń”.
+
+Skany są tylko w telefonie i nie wchodzą do kopii zapasowej. Mapster udostępnia je „do użytku niekomercyjnego”: nie wgrywaj ich do publicznego repozytorium.
+
+Gotowe kafelki (z własnego skryptu) nadal można podpiąć w `historical` w `config.js` (typ `xyz`).
 
 ## Struktura
 
 ```
 index.html  config.js  sw.js  manifest.webmanifest
 css/app.css
-js/app.js  store.js  geo.js  data.js  exporters.js  wmts2180.js
+js/app.js  store.js  geo.js  data.js  exporters.js  wmts2180.js  scanlayer.js
 lib/leaflet/   (Leaflet 1.9.4, licencja BSD-2)
 icons/
 ```

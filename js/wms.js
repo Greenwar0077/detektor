@@ -3,7 +3,7 @@ import { enqueue, noteError, withRetry, backoff, MAX_TRIES, stats } from './tile
 
 const L = window.L;
 
-export const RetryWms = L.TileLayer.WMS.extend({
+const retryTile = {
   createTile(coords, done) {
     const tile = document.createElement('img');
     tile.alt = '';
@@ -41,4 +41,7 @@ export const RetryWms = L.TileLayer.WMS.extend({
     attempt();
     return tile;
   }
-});
+};
+
+export const RetryWms = L.TileLayer.WMS.extend(retryTile);
+export const RetryXyz = L.TileLayer.extend(retryTile);

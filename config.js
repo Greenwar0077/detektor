@@ -29,6 +29,15 @@ export const CONFIG = {
     {
       id: 'orto',
       name: 'Ortofotomapa',
+      // WMTS: gotowe kafelki 256 px w EPSG:3857 (potwierdzone w GetCapabilities), dużo szybsze niż WMS GetMap.
+      type: 'xyz',
+      url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMTS/StandardResolution?service=WMTS&request=GetTile&version=1.0.0&layer=ORTOFOTOMAPA&style=default&format=image/jpeg&tilematrixset=EPSG:3857&tilematrix=EPSG:3857:{z}&tilerow={y}&tilecol={x}',
+      maxNativeZoom: 19,
+      attribution: '© GUGiK (geoportal.gov.pl)'
+    },
+    {
+      id: 'orto-wms',
+      name: 'Ortofotomapa (WMS, zapasowa, wolniejsza)',
       type: 'wms',
       url: 'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution',
       layers: 'Raster',

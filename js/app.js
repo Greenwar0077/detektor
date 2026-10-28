@@ -3,13 +3,13 @@ import { CONFIG } from '../config.js';
 import * as store from './store.js';
 import { createWmts2180Layer } from './wmts2180.js';
 import { ScanLayer, fitTransform, applyT, applyInv, SM } from './scanlayer.js';
-import { RetryWms } from './wms.js';
+import { RetryWms, RetryXyz } from './wms.js';
 import { stats as tileStats } from './tilequeue.js';
 import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -156,7 +156,7 @@ const S = {
   draft: null,
   urls: [],
   picking: null,
-  settings: { showTracks: LS.get('showTracks', true), keepAwake: LS.get('keepAwake', false), coverage: LS.get('coverage', false) },
+  settings: { showTracks: LS.get('showTracks', true), keepAwake: LS.get('keepAwake', false) },
   diag: {},
   warned: new Set()
 };
@@ -290,7 +290,7 @@ function makeLayer(def) {
   } else if (def.type === 'image') {
     layer = L.imageOverlay(def.url, def.bounds, o);
   } else {
-    layer = L.tileLayer(def.url, { ...o, tms: !!def.tms, bounds: def.bounds });
+    layer = new RetryXyz(def.url, { ...o, tms: !!def.tms, bounds: def.bounds });
   }
   S.diag[def.id] = { ok: 0, err: 0 };
   if (def.type !== 'image' && def.type !== 'scan') {
@@ -575,7 +575,6 @@ function recordPoint() {
   S.rec.gap = false;
   t.pts.push([f.lat, f.lng, f.ts, Math.round(f.acc)]);
   S.rec.line.addLatLng([f.lat, f.lng]);
-  scheduleCoverage();
   updateBar();
   if (t.pts.length - S.rec.lastSaved >= 15) {
     S.rec.lastSaved = t.pts.length;
@@ -607,7 +606,6 @@ async function stopRec() {
     }
     S.tracks.set(t.id, t);
     renderTrack(t);
-    scheduleCoverage();
   } else {
     store.del('tracks', t.id).catch(() => {});
   }
@@ -711,7 +709,6 @@ function applyFilter(id) {
   if (o) $('#filter-text').textContent = `Tylko: ${o.name}`;
   for (const p of S.pins.values()) renderPin(p);
   for (const t of S.tracks.values()) renderTrack(t);
-  scheduleCoverage();
 }
 
 /* ------------------------------------------------------------------ arkusze (dolne panele) */
@@ -2598,23 +2595,7 @@ async function openMenu(keepScroll = false) {
         switchRow('Nie wygaszaj ekranu', 'keepAwake', (on) => {
           if (on) acquireWake();
           else releaseWake();
-        }),
-        switchRow('Pokaż przeszukany teren (pokrycie tras)', 'coverage', setCoverage),
-        h(
-          'label',
-          { class: 'switch' },
-          h('span', null, 'Szerokość zasięgu cewki'),
-          h(
-            'select',
-            {
-              onChange: (e) => {
-                LS.set('swath', Number(e.target.value));
-                renderCoverage();
-              }
-            },
-            ...SWATHS.map((w) => h('option', { value: String(w), props: { selected: w === LS.get('swath', 2) } }, `${w} m`))
-          )
-        )
+        })
       ),
       h(
         'div',
@@ -2643,48 +2624,6 @@ async function openMenu(keepScroll = false) {
     keepScroll
   );
 }
-
-/* ------------------------------------------------------------------ pokrycie terenu */
-
-const SWATHS = [1, 2, 3];
-const covGroup = L.layerGroup();
-let covRaf = 0;
-
-function renderCoverage() {
-  covGroup.clearLayers();
-  if (!S.settings.coverage) return;
-  const w = LS.get('swath', 2);
-  const lat = map.getCenter().lat;
-  const mpp = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
-  const px = Math.max(2, w / mpp);
-  const style = { color: '#2fb36b', weight: px, opacity: 0.38, lineCap: 'round', lineJoin: 'round', interactive: false };
-  const lines = [];
-  for (const t of S.tracks.values()) if (inFilter(t) && t.pts) lines.push(t.pts);
-  if (S.rec && (!S.filter || S.rec.t.outing === S.filter)) lines.push(S.rec.t.pts);
-  for (const pts of lines) {
-    if (pts.length < 2) continue;
-    L.polyline(pts.map((q) => [q[0], q[1]]), style).addTo(covGroup);
-  }
-}
-
-function scheduleCoverage() {
-  if (!S.settings.coverage || covRaf) return;
-  covRaf = requestAnimationFrame(() => {
-    covRaf = 0;
-    renderCoverage();
-  });
-}
-
-function setCoverage(on) {
-  S.settings.coverage = on;
-  if (on) {
-    covGroup.addTo(map);
-    renderCoverage();
-  } else {
-    map.removeLayer(covGroup);
-  }
-}
-map.on('zoomend', scheduleCoverage);
 
 /* ------------------------------------------------------------------ mapa offline */
 
@@ -2931,7 +2870,6 @@ async function boot() {
     await adoptOrphans();
     for (const p of S.pins.values()) renderPin(p);
     for (const t of S.tracks.values()) renderTrack(t);
-    if (S.settings.coverage) setCoverage(true);
     backupReminder();
     if (S.outing) {
       LS.set('activeOuting', S.outing.id);

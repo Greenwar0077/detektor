@@ -9,7 +9,7 @@ import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist, bearing, pathLength } fro
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -52,6 +52,20 @@ function h(tag, attrs, ...kids) {
   }
   return el;
 }
+
+// przełącznik jak w ustawieniach telefonu
+function tgl(on, onChange, o = {}) {
+  const b = h('button', { type: 'button', class: 'tgl' + (o.danger ? ' danger' : ''), role: 'switch', 'aria-checked': String(!!on), disabled: o.disabled || null, 'aria-label': o.label || null });
+  b.append(h('i'));
+  b.addEventListener('click', () => {
+    on = !on;
+    b.setAttribute('aria-checked', String(on));
+    onChange(on);
+  });
+  return b;
+}
+const isAndroid = /Android/i.test(navigator.userAgent);
+const navHref = (lat, lng) => (isAndroid ? `geo:${lat},${lng}?q=${lat},${lng}` : `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
 
 const ICONS = {
   locate: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/>',
@@ -452,6 +466,7 @@ function updateLocateBtn() {
 }
 
 function startGps() {
+  if (S.fake) return;
   if (!('geolocation' in navigator)) {
     setGps('err', 'Ta przeglądarka nie ma GPS');
     return;
@@ -466,6 +481,7 @@ function startGps() {
 }
 
 function onFix(pos) {
+  if (S.fake && !pos._fake) return;
   const c = pos.coords;
   S.fix = { lat: c.latitude, lng: c.longitude, acc: c.accuracy ?? 9999, ts: pos.timestamp || Date.now() };
   S.gpsState = 'ok';
@@ -1225,20 +1241,7 @@ function renderForm() {
     )
   );
 
-  const hazBtn = h(
-    'button',
-    {
-      type: 'button',
-      class: 'opt dangerous',
-      'aria-pressed': String(d.hazard),
-      onClick: () => {
-        d.hazard = !d.hazard;
-        hazBtn.setAttribute('aria-pressed', String(d.hazard));
-        hazBtn.textContent = d.hazard ? 'Tak' : 'Nie';
-      }
-    },
-    d.hazard ? 'Tak' : 'Nie'
-  );
+  const hazBtn = tgl(d.hazard, (v) => { d.hazard = v; }, { danger: true, label: 'Niebezpieczne' });
 
   const soilOptions = [...SOILS];
   if (d.soil && !soilOptions.includes(d.soil)) soilOptions.push(d.soil);
@@ -1568,7 +1571,9 @@ function openDetail(id) {
         'a',
         {
           class: 'btn',
-          href: `geo:${p.lat},${p.lng}?q=${p.lat},${p.lng}(${label})`
+          href: isAndroid ? `geo:${p.lat},${p.lng}?q=${p.lat},${p.lng}(${label})` : navHref(p.lat, p.lng),
+          target: '_blank',
+          rel: 'noopener'
         },
         icon('nav', 18),
         'Nawiguj'
@@ -1650,20 +1655,7 @@ function openNewOuting() {
   const def = defaultOutingName(Date.now());
   let track = LS.get('trackDefault', true);
   const input = h('input', { type: 'text', maxlength: '80', placeholder: def, autocomplete: 'off', 'aria-label': 'Nazwa wyjścia' });
-  const sw = h(
-    'button',
-    {
-      type: 'button',
-      class: 'opt',
-      'aria-pressed': String(track),
-      onClick: () => {
-        track = !track;
-        sw.setAttribute('aria-pressed', String(track));
-        sw.textContent = track ? 'Tak' : 'Nie';
-      }
-    },
-    track ? 'Tak' : 'Nie'
-  );
+  const sw = tgl(track, (v) => { track = v; });
   openSheet('Nowe wyjście', [
     h('div', { class: 'field' }, h('label', null, 'Nazwa (opcjonalnie)'), input),
     h('div', { class: 'switch' }, h('span', null, 'Nagrywaj trasę (GPS)', h('small', { class: 'hint' }, 'Wyłącz, żeby oszczędzać baterię.')), sw),
@@ -1902,20 +1894,11 @@ function openOutingDetail(id, keepScroll = false) {
 function histRow(def) {
   const on = !!layerState.hist[def.id];
   const op = layerState.opacity[def.id] ?? def.opacity ?? 1;
-  const toggle = h(
-    'button',
-    {
-      type: 'button',
-      class: 'opt',
-      'aria-pressed': String(on),
-      onClick: () => {
-        layerState.hist[def.id] = !on;
-        applyLayers();
-        openLayers(true);
-      }
-    },
-    on ? 'Włączona' : 'Wyłączona'
-  );
+  const toggle = tgl(on, (v) => {
+    layerState.hist[def.id] = v;
+    applyLayers();
+    openLayers(true);
+  }, { label: def.name });
   const slider = h('input', {
     type: 'range',
     min: '0.1',
@@ -2379,12 +2362,7 @@ function endAlign() {
 }
 
 function switchLine(label, hint, on, disabled, onClick) {
-  const btn = h(
-    'button',
-    { type: 'button', class: 'opt', 'aria-pressed': String(on), disabled: disabled || null, onClick },
-    on ? 'Tak' : 'Nie'
-  );
-  return h('div', { class: 'switch' }, h('span', null, label, hint && h('small', { class: 'hint' }, hint)), btn);
+  return h('div', { class: 'switch' }, h('span', null, label, hint && h('small', { class: 'hint' }, hint)), tgl(on, () => onClick(), { disabled }));
 }
 
 const BASE_SHORT = { osm: 'Mapa', orto: 'Orto', 'orto-hr': 'Orto HR', 'nmt-base': 'LiDAR' };
@@ -2428,7 +2406,37 @@ function openLayers(keepScroll = false) {
   const hist = histDefs().map(histRow);
   const histOn = histDefs().filter((d) => layerState.hist[d.id]).length;
   const histCurtain = hist.length ? switchLine('Kurtyna: porównaj z dzisiejszą mapą', 'Przesuwasz pionową linię: po lewej mapa historyczna, po prawej dzisiejsza.', layerState.curtain, !anyHist(), () => { toggleCurtain(); openLayers(true); }) : null;
-  const extras = [lidarOnly || layerState.nmt ? 'LiDAR' : null, layerState.names ? 'nazwy' : null].filter(Boolean);
+  const lidarBox = h(
+    'div',
+    { class: 'section' },
+    switchLine('Cieniowanie LiDAR na podkładzie', lidarOnly ? ' (wybrany sam LiDAR)' : '', lidarOnly || layerState.nmt, lidarOnly, () => {
+      toggleNmt();
+      openLayers(true);
+    }),
+    !lidarOnly &&
+      layerState.nmt &&
+      h(
+        'label',
+        { class: 'hint slider-line' },
+        `LiDAR: ${Math.round(layerState.nmtAlpha * 100)}% (0 = sam podkład, 100 = sam LiDAR)`,
+        h('input', {
+          type: 'range',
+          min: '0',
+          max: '1',
+          step: '0.05',
+          'aria-label': 'Mieszanie podkładu z LiDAR',
+          props: { value: String(layerState.nmtAlpha) },
+          onInput: (e) => {
+            const v = Number(e.target.value);
+            layerState.nmtAlpha = v;
+            e.target.parentNode.firstChild.nodeValue = `LiDAR: ${Math.round(v * 100)}% (0 = sam podkład, 100 = sam LiDAR)`;
+            for (const [id, l] of layerObjs) if (id.endsWith('-nmt') && l.setShadeAlpha) l.setShadeAlpha(v);
+            layerState.nmtMix = v;
+            LS.set('layers', layerState);
+          }
+        })
+      )
+  );
   const active = activePlaceId && S.places.get(activePlaceId);
   const vis = (label, hint, key, after) =>
     switchLine(label, hint, S.settings[key], false, () => {
@@ -2441,44 +2449,11 @@ function openLayers(keepScroll = false) {
   openSheet(
     'Warstwy mapy',
     [
-      h('div', { class: 'section' }, h('h3', null, 'Podkład'), h('div', { role: 'radiogroup', class: 'section' }, base)),
+      h('div', { class: 'section' }, h('h3', null, 'Podkład'), h('div', { role: 'radiogroup', class: 'section' }, base), lidarBox),
       fold(
         'l:extras',
         'Dodatki',
-        extras.join(', ') || 'brak',
-        switchLine(
-          'Cieniowanie LiDAR na podkładzie',
-          lidarOnly ? ' (wybrany sam LiDAR)' : '',
-          lidarOnly || layerState.nmt,
-          lidarOnly,
-          () => {
-            toggleNmt();
-            openLayers(true);
-          }
-        ),
-        !lidarOnly &&
-          layerState.nmt &&
-          h(
-            'label',
-            { class: 'hint slider-line' },
-            `LiDAR: ${Math.round(layerState.nmtAlpha * 100)}% (0 = sam podkład, 100 = sam LiDAR)`,
-            h('input', {
-              type: 'range',
-              min: '0',
-              max: '1',
-              step: '0.05',
-              'aria-label': 'Mieszanie podkładu z LiDAR',
-              props: { value: String(layerState.nmtAlpha) },
-              onInput: (e) => {
-                const v = Number(e.target.value);
-                layerState.nmtAlpha = v;
-                e.target.parentNode.firstChild.nodeValue = `LiDAR: ${Math.round(v * 100)}% (0 = sam podkład, 100 = sam LiDAR)`;
-                for (const [id, l] of layerObjs) if (id.endsWith('-nmt') && l.setShadeAlpha) l.setShadeAlpha(v);
-                layerState.nmtMix = v;
-                LS.set('layers', layerState);
-              }
-            })
-          ),
+        layerState.names ? 'nazwy' : 'brak',
         switchLine('Nazwy ulic, miejscowości i numery domów', '', layerState.names, false, () => {
           toggleNames();
           openLayers(true);
@@ -2608,23 +2583,11 @@ async function handleImport(file, box) {
 }
 
 function switchRow(label, key, onChange) {
-  const btn = h(
-    'button',
-    {
-      type: 'button',
-      class: 'opt',
-      'aria-pressed': String(!!S.settings[key]),
-      onClick: () => {
-        S.settings[key] = !S.settings[key];
-        LS.set(key, S.settings[key]);
-        btn.setAttribute('aria-pressed', String(S.settings[key]));
-        btn.textContent = S.settings[key] ? 'Tak' : 'Nie';
-        onChange(S.settings[key]);
-      }
-    },
-    S.settings[key] ? 'Tak' : 'Nie'
-  );
-  return h('div', { class: 'switch' }, h('span', null, label), btn);
+  return h('div', { class: 'switch' }, h('span', null, label), tgl(!!S.settings[key], (v) => {
+    S.settings[key] = v;
+    LS.set(key, v);
+    onChange(v);
+  }));
 }
 
 function parseLatLng(q) {
@@ -2759,7 +2722,8 @@ async function openMenu(keepScroll = false) {
       fold(
         'm:test',
         'Narzędzia testowe',
-        '',
+        S.fake ? 'sztuczny GPS' : '',
+        fakeGpsNode(),
         h('p', { class: 'hint' }, 'Przykładowa wyprawa wokół środka mapy (trasa + 8 znalezisk) do sprawdzania listy, filtrów, eksportu i kopii. Oznaczona [TEST].'),
         h(
           'div',
@@ -3270,20 +3234,11 @@ function openPlaceDetail(id, keepScroll = false) {
       'div',
       { class: 'switch' },
       h('span', null, `${m.name}${m.pts && m.pts.length ? '' : ' (niedopasowana)'}`),
-      h(
-        'button',
-        {
-          type: 'button',
-          class: 'opt',
-          'aria-pressed': String(on),
-          onClick: () => {
-            layerState.hist[key] = !on;
-            applyLayers();
-            openPlaceDetail(id, true);
-          }
-        },
-        on ? 'Widoczna' : 'Ukryta'
-      )
+      tgl(on, (v) => {
+        layerState.hist[key] = v;
+        applyLayers();
+        openPlaceDetail(id, true);
+      }, { label: 'Widoczna' })
     );
   });
   const scanInput = h('input', {
@@ -3465,7 +3420,7 @@ function showMapMenu(ll) {
     h('div', { class: 'row-actions' },
       h('button', { type: 'button', class: 'btn', onClick: () => { close(); startRuler(ll); } }, icon('ruler', 18), 'Linijka'),
       h('button', { type: 'button', class: 'btn', onClick: () => { close(); startNav(ll.lat, ll.lng, 'Punkt na mapie'); } }, icon('locate', 18), 'Kompas'),
-      h('a', { class: 'btn', href: `geo:${ll.lat},${ll.lng}?q=${ll.lat},${ll.lng}` }, icon('nav', 18), 'Nawiguj'),
+      h('a', { class: 'btn', href: navHref(ll.lat, ll.lng), target: '_blank', rel: 'noopener' }, icon('nav', 18), 'Nawiguj'),
       h('button', { type: 'button', class: 'btn', onClick: () => { close(); copyText(fmtLL(ll.lat, ll.lng), 'Skopiowano współrzędne.'); } }, icon('copy', 18), 'Kopiuj')
     )
   );
@@ -3619,6 +3574,53 @@ function updateNav() {
     arrow.style.transform = `rotate(${Math.round(az)}deg)`;
     $('#nav-hint').textContent = 'Brak czujnika kierunku: strzałka pokazuje azymut względem północy. Idź według kompasu.';
   }
+}
+
+
+/* sztuczna pozycja GPS do testów (Narzędzia testowe w menu) */
+S.fake = null;
+let fakeTimer = null;
+function pushFake() {
+  if (!S.fake) return;
+  onFix({ coords: { latitude: S.fake.lat, longitude: S.fake.lng, accuracy: 5 }, timestamp: Date.now(), _fake: true });
+}
+function setFakeGps(lat, lng) {
+  if (S.watchId != null) {
+    navigator.geolocation.clearWatch(S.watchId);
+    S.watchId = null;
+  }
+  S.fake = { lat, lng };
+  clearInterval(fakeTimer);
+  fakeTimer = setInterval(pushFake, 5000);
+  pushFake();
+  map.setView([lat, lng], Math.max(map.getZoom(), 16));
+}
+function nudgeFake(dN, dE) {
+  if (!S.fake) return toast('Najpierw ustaw sztuczną pozycję.');
+  setFakeGps(S.fake.lat + dN / 111320, S.fake.lng + dE / (111320 * Math.cos((S.fake.lat * Math.PI) / 180)));
+}
+function stopFakeGps() {
+  S.fake = null;
+  clearInterval(fakeTimer);
+  S.fix = null;
+  startGps();
+  toast('Wróciłem do prawdziwego GPS.');
+}
+function fakeGpsNode() {
+  const input = h('input', { type: 'text', inputmode: 'decimal', placeholder: '51.2465, 22.5684', autocomplete: 'off', 'aria-label': 'Sztuczna pozycja', props: { value: S.fake ? fmtLL(S.fake.lat, S.fake.lng) : '' } });
+  const apply = () => {
+    const ll = parseLatLng(input.value);
+    if (!ll) return toast('Wpisz współrzędne, np. 51.2465, 22.5684.');
+    setFakeGps(ll[0], ll[1]);
+  };
+  const step = (label, n, e) => h('button', { type: 'button', class: 'btn', onClick: () => nudgeFake(n, e) }, label);
+  return [
+    h('p', { class: 'hint' }, S.fake ? 'Sztuczna pozycja jest włączona, prawdziwy GPS jest ignorowany.' : 'Ustaw własną pozycję GPS, żeby testować kompas, linijkę i trasę na komputerze.'),
+    h('div', { class: 'field' }, input),
+    h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn primary', onClick: apply }, 'Ustaw pozycję'), h('button', { type: 'button', class: 'btn', onClick: () => { const c = map.getCenter(); setFakeGps(c.lat, c.lng); input.value = fmtLL(c.lat, c.lng); } }, 'Środek mapy')),
+    h('div', { class: 'row-actions' }, step('↑ 10 m', 10, 0), step('↓ 10 m', -10, 0), step('← 10 m', 0, -10), step('→ 10 m', 0, 10)),
+    S.fake && h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn', onClick: () => { stopFakeGps(); openMenu(true); } }, 'Wyłącz sztuczną pozycję'))
+  ];
 }
 
 /* ------------------------------------------------------------------ dane testowe */

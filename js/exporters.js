@@ -101,7 +101,7 @@ export function blobToDataURL(blob) {
   });
 }
 
-export async function makeBackup(pins, tracks, photos, outings = []) {
+export async function makeBackup(pins, tracks, photos, outings = [], places = []) {
   const ph = [];
   for (const p of photos) {
     ph.push({ id: p.id, ts: p.ts, dataUrl: await blobToDataURL(p.blob) });
@@ -111,6 +111,7 @@ export async function makeBackup(pins, tracks, photos, outings = []) {
     version: 2,
     exported: iso(Date.now()),
     outings,
+    places,
     pins,
     tracks,
     photos: ph
@@ -192,8 +193,25 @@ export function parseBackup(text) {
       track: !!o.track,
       quick: !!o.quick,
       legacy: !!o.legacy,
-      note: str(o.note, 3000)
+      note: str(o.note, 3000),
+      place: str(o.place, 80) || null
     });
   }
-  return { pins, tracks, photos, outings };
+  const places = [];
+  for (const q of Array.isArray(data.places) ? data.places : []) {
+    if (!q || typeof q.id !== 'string' || !Array.isArray(q.poly)) continue;
+    const poly = q.poly.filter((c) => Array.isArray(c) && num(c[0]) !== null && num(c[1]) !== null).map((c) => [c[0], c[1]]);
+    if (poly.length < 3) continue;
+    places.push({
+      id: q.id.slice(0, 80),
+      name: str(q.name, 80) || 'Miejsce',
+      poly,
+      note: str(q.note, 5000),
+      status: ['todo', 'plan', 'done', 'dry'].includes(q.status) ? q.status : 'todo',
+      priority: Math.min(5, Math.max(1, Math.round(num(q.priority) ?? 3))),
+      created: num(q.created) ?? Date.now(),
+      updated: num(q.updated) ?? Date.now()
+    });
+  }
+  return { pins, tracks, photos, outings, places };
 }

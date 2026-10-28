@@ -91,3 +91,10 @@ export function fmtDist(m) {
   if (m < 1000) return `${Math.round(m)} m`;
   return `${(m / 1000).toFixed(m < 10000 ? 2 : 1).replace('.', ',')} km`;
 }
+
+export function bearing(lat1, lng1, lat2, lng2) {
+  const r = Math.PI / 180;
+  const y = Math.sin((lng2 - lng1) * r) * Math.cos(lat2 * r);
+  const x = Math.cos(lat1 * r) * Math.sin(lat2 * r) - Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos((lng2 - lng1) * r);
+  return ((Math.atan2(y, x) / r) + 360) % 360;
+}

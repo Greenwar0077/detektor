@@ -5,11 +5,11 @@ import { createWmts2180Layer } from './wmts2180.js';
 import { ScanLayer, fitTransform, applyT, applyInv, SM } from './scanlayer.js';
 import { RetryWms, RetryXyz } from './wms.js';
 import { stats as tileStats } from './tilequeue.js';
-import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist } from './geo.js';
+import { toPuwg1992, toDMS, fmtLL, haversine, fmtDist, bearing, pathLength } from './geo.js';
 import { CATEGORIES, SOILS, catLabel, isCat } from './data.js';
 import { toGeoJSON, toGPX, makeBackup, parseBackup } from './exporters.js';
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 const L = window.L;
 const $ = (s, r = document) => r.querySelector(s);
 
@@ -60,6 +60,8 @@ const ICONS = {
   list: '<path d="M8.5 6.5H21M8.5 12H21M8.5 17.5H21"/><circle cx="4" cy="6.5" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="17.5" r="1"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+  ruler: '<rect x="2.5" y="8" width="19" height="8" rx="1.5"/><path d="M6.5 8v3M10 8v4.5M13.5 8v3M17 8v4.5"/>',
   camera: '<path d="M4 8.5h3l1.5-2.5h7L17 8.5h3v10.5H4z"/><circle cx="12" cy="13.5" r="3.5"/>',
   image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m4 18 5-5 3.5 3.5L16 13l4 4.5"/>',
   nav: '<path d="M12 3 5 20.5l7-3.5 7 3.5L12 3Z"/>',
@@ -182,6 +184,12 @@ for (const [id, label, text] of quickDefs) {
   $('#btn-layers').after(bp);
 }
 $('#btn-menu').append(icon('menu'));
+{
+  const bs = h('button', { id: 'btn-search', class: 'round', type: 'button', 'aria-label': 'Szukaj miejsca' });
+  bs.append(icon('search'));
+  bs.addEventListener('click', () => openSheet('Szukaj miejsca', searchNode()));
+  $('#gps-chip').after(bs);
+}
 $('#sheet-close').append(icon('close'));
 $('#viewer-close').append(icon('close'));
 $('#btn-list').append(icon('list', 20), h('span', { id: 'lbl-list' }, 'Wyjścia'));
@@ -461,6 +469,7 @@ function onFix(pos) {
   const c = pos.coords;
   S.fix = { lat: c.latitude, lng: c.longitude, acc: c.accuracy ?? 9999, ts: pos.timestamp || Date.now() };
   S.gpsState = 'ok';
+  if (typeof updateNav === 'function') updateNav();
   const ll = [S.fix.lat, S.fix.lng];
   if (!map.hasLayer(gpsAcc)) {
     gpsAcc.addTo(map);
@@ -1564,6 +1573,7 @@ function openDetail(id) {
         icon('nav', 18),
         'Nawiguj'
       ),
+      h('button', { type: 'button', class: 'btn', onClick: () => { closeSheet(); startNav(p.lat, p.lng, catLabel(p.cat)); } }, icon('locate', 18), 'Kompas'),
       h(
         'button',
         { type: 'button', class: 'btn', onClick: () => copyText(fmtLL(p.lat, p.lng), 'Skopiowano współrzędne.') },
@@ -2392,17 +2402,16 @@ function openLayers(keepScroll = false) {
       'button',
       {
         type: 'button',
-        class: 'base-tile',
+        class: 'radio-row has-thumb',
         role: 'radio',
         'aria-checked': String(layerState.base === def.id),
-        title: def.name,
         onClick: () => {
           setBase(def.id);
           openLayers(true);
         }
       },
       h('span', { class: 'thumb', style: `background-image:${BASE_THUMBS[def.id] || 'none'}` }),
-      h('span', { class: 'cap' }, def.name.replace(/\s*\(.*\)\s*/, ''))
+      h('span', null, def.name)
     )
   );
   const lidarOnly = layerState.base === 'nmt-base';
@@ -2432,7 +2441,7 @@ function openLayers(keepScroll = false) {
   openSheet(
     'Warstwy mapy',
     [
-      h('div', { class: 'section' }, h('h3', null, 'Podkład'), h('div', { role: 'radiogroup', class: 'base-grid' }, base)),
+      h('div', { class: 'section' }, h('h3', null, 'Podkład'), h('div', { role: 'radiogroup', class: 'section' }, base)),
       fold(
         'l:extras',
         'Dodatki',
@@ -2716,7 +2725,6 @@ async function openMenu(keepScroll = false) {
         ),
         h('p', { class: 'hint' }, 'To eksport wszystkich wyjść naraz (bez zdjęć). Pojedyncze wyjście wyeksportujesz z jego karty.')
       ),
-      fold('m:search', 'Szukaj miejsca', '', searchNode()),
       fold(
         'm:outings',
         'Wyjścia',
@@ -3446,7 +3454,7 @@ function openPlaceDetail(id, keepScroll = false) {
 /* ------------------------------------------------------------------ menu na mapie (przytrzymanie / prawy przycisk) */
 
 function showMapMenu(ll) {
-  if (S.picking || S.aligning || sheetOpen) return;
+  if (S.picking || S.aligning || sheetOpen || S.ruler) return;
   const close = () => map.closePopup();
   const box = h(
     'div',
@@ -3455,11 +3463,162 @@ function showMapMenu(ll) {
     h('button', { type: 'button', class: 'btn primary', onClick: () => { close(); addPlaceAt(ll); } }, icon('pin', 18), 'Dodaj miejsce tutaj'),
     h('button', { type: 'button', class: 'btn', onClick: () => { close(); openForm(null, { lat: ll.lat, lng: ll.lng, acc: null, src: 'pick' }); } }, icon('plus', 18), 'Dodaj znalezisko tutaj'),
     h('div', { class: 'row-actions' },
+      h('button', { type: 'button', class: 'btn', onClick: () => { close(); startRuler(ll); } }, icon('ruler', 18), 'Linijka'),
+      h('button', { type: 'button', class: 'btn', onClick: () => { close(); startNav(ll.lat, ll.lng, 'Punkt na mapie'); } }, icon('locate', 18), 'Kompas'),
       h('a', { class: 'btn', href: `geo:${ll.lat},${ll.lng}?q=${ll.lat},${ll.lng}` }, icon('nav', 18), 'Nawiguj'),
       h('button', { type: 'button', class: 'btn', onClick: () => { close(); copyText(fmtLL(ll.lat, ll.lng), 'Skopiowano współrzędne.'); } }, icon('copy', 18), 'Kopiuj')
     )
   );
   L.popup({ closeButton: false, className: 'ctx-popup', minWidth: 200 }).setLatLng(ll).setContent(box).openOn(map);
+}
+
+
+/* ------------------------------------------------------------------ linijka i kompas do celu */
+
+const fmtAz = (a) => `${String(Math.round(a) % 360).padStart(3, '0')}°`;
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const dirName = (a) => COMPASS[Math.round(a / 45) % 8];
+
+S.ruler = null;
+function startRuler(first) {
+  if (S.ruler) endRuler();
+  const line = L.polyline([], { color: '#e8590c', weight: 4, opacity: 0.9, interactive: false }).addTo(map);
+  const marks = L.layerGroup().addTo(map);
+  S.ruler = { pts: [], line, marks };
+  document.body.classList.add('ruling');
+  $('#crosshair').hidden = false;
+  rulerBar();
+  if (first) {
+    map.panTo(first);
+    addRulerPoint(first);
+  }
+  rulerBar();
+}
+function addRulerPoint(ll) {
+  const r = S.ruler;
+  if (!r) return;
+  r.pts.push([ll.lat, ll.lng]);
+  r.line.setLatLngs(r.pts);
+  L.circleMarker([ll.lat, ll.lng], { radius: 5, color: '#fff', weight: 2, fillColor: '#e8590c', fillOpacity: 1, interactive: false }).addTo(r.marks);
+  rulerBar();
+}
+function endRuler() {
+  const r = S.ruler;
+  if (!r) return;
+  map.removeLayer(r.line);
+  map.removeLayer(r.marks);
+  S.ruler = null;
+  document.body.classList.remove('ruling');
+  $('#crosshair').hidden = true;
+  $('#rulerbar').hidden = true;
+}
+function rulerBar() {
+  const r = S.ruler;
+  let bar = $('#rulerbar');
+  if (!bar) {
+    bar = h('div', { id: 'rulerbar', class: 'toolbar' });
+    document.body.append(bar);
+  }
+  bar.hidden = false;
+  const pts = r.pts;
+  const total = pathLength(pts);
+  const n = pts.length;
+  const last = n > 1 ? haversine(pts[n - 2][0], pts[n - 2][1], pts[n - 1][0], pts[n - 1][1]) : 0;
+  const az = n > 1 ? bearing(pts[n - 2][0], pts[n - 2][1], pts[n - 1][0], pts[n - 1][1]) : null;
+  bar.replaceChildren(
+    h(
+      'div',
+      { class: 'tb-info' },
+      h('strong', null, n > 1 ? `Razem ${fmtDist(total)}` : n ? 'Dodaj kolejny punkt' : 'Ustaw celownik i dodaj punkt'),
+      n > 1 && h('span', null, `ostatni odcinek ${fmtDist(last)} · azymut ${fmtAz(az)} ${dirName(az)} · punktów: ${n}`)
+    ),
+    h(
+      'div',
+      { class: 'tb-row' },
+      h('button', { type: 'button', class: 'btn primary', onClick: () => addRulerPoint(map.getCenter()) }, icon('plus', 18), 'Punkt'),
+      S.fix && h('button', { type: 'button', class: 'btn', onClick: () => addRulerPoint(L.latLng(S.fix.lat, S.fix.lng)) }, 'Ja'),
+      h('button', { type: 'button', class: 'btn', disabled: n ? null : true, onClick: () => { pts.pop(); r.line.setLatLngs(pts); const ms = r.marks.getLayers(); if (ms.length) r.marks.removeLayer(ms[ms.length - 1]); rulerBar(); } }, 'Cofnij'),
+      n > 0 && h('button', { type: 'button', class: 'btn', onClick: () => { const q = pts[n - 1]; endRuler(); startNav(q[0], q[1], 'Koniec linijki'); } }, 'Kompas'),
+      h('button', { type: 'button', class: 'btn', onClick: endRuler }, 'Zamknij')
+    )
+  );
+}
+
+/* kompas: azymut i odległość do celu + strzałka względem tego, w którą stronę patrzy telefon */
+S.nav = null;
+let heading = null;
+let compassOn = false;
+function onOrient(e) {
+  let hd = null;
+  if (typeof e.webkitCompassHeading === 'number') hd = e.webkitCompassHeading;
+  else if (e.alpha != null && (e.absolute || e.type === 'deviceorientationabsolute')) hd = (360 - e.alpha) % 360;
+  if (hd == null) return;
+  heading = heading == null ? hd : (heading + ((((hd - heading) % 360) + 540) % 360 - 180) * 0.25 + 360) % 360;
+  updateNav();
+}
+async function enableCompass() {
+  if (compassOn) return;
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      if ((await DeviceOrientationEvent.requestPermission()) !== 'granted') return;
+    }
+  } catch (e) {
+    return;
+  }
+  compassOn = true;
+  window.addEventListener('deviceorientationabsolute', onOrient, true);
+  window.addEventListener('deviceorientation', onOrient, true);
+}
+function startNav(lat, lng, name) {
+  S.nav = { lat, lng, name, line: S.nav ? S.nav.line : null };
+  if (!S.nav.line) S.nav.line = L.polyline([], { color: '#1971c2', weight: 3, dashArray: '6 6', interactive: false }).addTo(map);
+  enableCompass();
+  navHud();
+  if (!S.fix) toast('Czekam na GPS, azymut pokaże się po złapaniu pozycji.', 3500);
+  updateNav();
+}
+function endNav() {
+  if (!S.nav) return;
+  map.removeLayer(S.nav.line);
+  S.nav = null;
+  $('#navhud').hidden = true;
+}
+function navHud() {
+  let hud = $('#navhud');
+  if (!hud) {
+    hud = h('div', { id: 'navhud', class: 'toolbar navhud' },
+      h('div', { class: 'arrow-wrap' }, h('div', { id: 'nav-arrow', class: 'nav-arrow' }, icon('nav', 36))),
+      h('div', { class: 'tb-info' }, h('strong', { id: 'nav-az' }), h('span', { id: 'nav-dist' }), h('span', { id: 'nav-hint', class: 'hint' })),
+      h('button', { type: 'button', class: 'btn', onClick: endNav }, 'Zakończ')
+    );
+    document.body.append(hud);
+  }
+  hud.hidden = false;
+}
+function updateNav() {
+  const n = S.nav;
+  if (!n) return;
+  const hud = $('#navhud');
+  if (!hud) return;
+  if (!S.fix) {
+    $('#nav-az').textContent = n.name;
+    $('#nav-dist').textContent = 'Brak pozycji GPS';
+    $('#nav-hint').textContent = '';
+    return;
+  }
+  const az = bearing(S.fix.lat, S.fix.lng, n.lat, n.lng);
+  const d = haversine(S.fix.lat, S.fix.lng, n.lat, n.lng);
+  n.line.setLatLngs([[S.fix.lat, S.fix.lng], [n.lat, n.lng]]);
+  $('#nav-az').textContent = `${n.name}: azymut ${fmtAz(az)} ${dirName(az)}`;
+  $('#nav-dist').textContent = d < 3 ? 'Jesteś na miejscu' : `Odległość ${fmtDist(d)}`;
+  const arrow = $('#nav-arrow');
+  if (heading != null) {
+    arrow.style.transform = `rotate(${Math.round(az - heading)}deg)`;
+    $('#nav-hint').textContent = `Telefon patrzy na ${fmtAz(heading)} ${dirName(heading)}. Trzymaj płasko, z dala od wykrywacza i metalu.`;
+  } else {
+    arrow.style.transform = `rotate(${Math.round(az)}deg)`;
+    $('#nav-hint').textContent = 'Brak czujnika kierunku: strzałka pokazuje azymut względem północy. Idź według kompasu.';
+  }
 }
 
 /* ------------------------------------------------------------------ dane testowe */

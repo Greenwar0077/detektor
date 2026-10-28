@@ -446,3 +446,24 @@ body.aligning .curtain { display: none; }
 .chip-btn { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); font-size: 13px; font-weight: 600; }
 .chip-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 .sheet-body input[type="search"] { width: 100%; min-height: 48px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: inherit; font: inherit; }
+
+#btn-search { position: absolute; z-index: 1000; left: var(--gutter-l); top: calc(env(safe-area-inset-top, 0px) + 62px); }
+body.picking #btn-search, body.aligning #btn-search { display: none; }
+.radio-row.has-thumb { padding: 6px 12px 6px 6px; min-height: 60px; }
+.radio-row .thumb { width: 48px; height: 48px; flex: none; border-radius: 8px; background-size: cover; background-position: center; border: 1px solid var(--line); }
+.radio-row.has-thumb .mark { display: none; }
+.radio-row.has-thumb[aria-checked="true"] { box-shadow: 0 0 0 2px var(--accent); }
+body.ruling .bottombar, body.ruling .filterbar { display: none; }
+.toolbar { position: absolute; z-index: 1100; left: 10px; right: 10px; bottom: calc(env(safe-area-inset-bottom, 0px) + 10px); padding: 10px 12px; border-radius: 16px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; }
+.toolbar[hidden] { display: none; }
+.toolbar .tb-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 14px; }
+.toolbar .tb-info span { color: var(--muted); font-size: 13px; }
+.toolbar .tb-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.toolbar .tb-row .btn { flex: 1 1 auto; min-height: 44px; }
+.navhud { flex-direction: row; align-items: center; bottom: calc(env(safe-area-inset-bottom, 0px) + 96px); }
+body.ruling .navhud { bottom: calc(env(safe-area-inset-bottom, 0px) + 150px); }
+.navhud .tb-info { flex: 1; }
+.arrow-wrap { width: 56px; height: 56px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; flex: none; }
+.nav-arrow { transition: transform 0.15s linear; display: grid; place-items: center; color: var(--accent); }
+.nav-arrow svg { fill: currentColor; }
+.ctx .row-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .ctx .row-actions .btn { min-width: 0; padding: 0 8px; }
